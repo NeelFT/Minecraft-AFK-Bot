@@ -7,7 +7,7 @@ const config = require('./config.json');
 // SETTINGS
 // ==================================================
 
-const SERVER_HOST = 'balashark.aternos.host';
+const SERVER_HOST = 'TokiCraftMC.aternos.me';
 const SERVER_PORT = 11625;
 
 const WEB_PORT = process.env.PORT || 10000;
@@ -15,15 +15,15 @@ const RECONNECT_DELAY = 30000;
 
 
 // ==================================================
-// BOT STATE
+// STATE
 // ==================================================
 
 let bot = null;
 
 let botStatus = 'Starting';
 let lastError = 'None';
-let lastDisconnectReason = 'None';
-let lastKickReason = 'None';
+let lastKick = 'None';
+let lastDisconnect = 'None';
 let connectedSince = null;
 
 let sessionId = 0;
@@ -43,7 +43,7 @@ let targetPitch = 0;
 
 
 // ==================================================
-// EXPRESS WEB SERVER
+// WEB SERVER
 // ==================================================
 
 const app = express();
@@ -56,104 +56,106 @@ app.get('/', (req, res) => {
     : 'Not connected';
 
   res.status(200).send(`
-    <!DOCTYPE html>
+<!DOCTYPE html>
 
-    <html>
+<html>
 
-    <head>
+<head>
 
-      <meta charset="UTF-8">
+<meta charset="UTF-8">
 
-      <meta
-        name="viewport"
-        content="width=device-width, initial-scale=1.0"
-      >
+<meta
+  name="viewport"
+  content="width=device-width, initial-scale=1.0"
+>
 
-      <title>Nunya Bot Status</title>
+<title>Nunya Bot Status</title>
 
-      <style>
+<style>
 
-        body {
-          background: #111;
-          color: #eee;
-          font-family: Arial, sans-serif;
-          padding: 30px;
-          line-height: 1.6;
-        }
+body {
+  background: #111;
+  color: #eee;
+  font-family: Arial, sans-serif;
+  padding: 25px;
+}
 
-        .card {
-          max-width: 600px;
-          margin: auto;
-          background: #1e1e1e;
-          padding: 25px;
-          border-radius: 15px;
-        }
+.card {
+  max-width: 600px;
+  margin: auto;
+  background: #1e1e1e;
+  padding: 25px;
+  border-radius: 16px;
+  line-height: 1.6;
+}
 
-        h1 {
-          margin-top: 0;
-        }
+h1 {
+  font-size: 36px;
+}
 
-        .status {
-          font-size: 22px;
-          font-weight: bold;
-        }
+.status {
+  font-size: 24px;
+  font-weight: bold;
+  margin-bottom: 20px;
+}
 
-        .item {
-          margin-top: 12px;
-          word-break: break-word;
-        }
+.item {
+  margin-top: 15px;
+  word-break: break-word;
+}
 
-      </style>
+</style>
 
-    </head>
+</head>
 
 
-    <body>
+<body>
 
-      <div class="card">
+<div class="card">
 
-        <h1>🤖 Nunya Bot Status</h1>
+<h1>🤖 Nunya Bot Status</h1>
 
-        <div class="status">
-          Status: ${escapeHtml(botStatus)}
-        </div>
+<div class="status">
+Status: ${escapeHtml(botStatus)}
+</div>
 
-        <div class="item">
-          🌍 Server:
-          ${escapeHtml(SERVER_HOST)}:${SERVER_PORT}
-        </div>
+<div class="item">
+🌍 Server:
+${escapeHtml(SERVER_HOST)}:${SERVER_PORT}
+</div>
 
-        <div class="item">
-          👤 Username:
-          ${escapeHtml(config.botUsername)}
-        </div>
+<div class="item">
+👤 Username:
+${escapeHtml(config.botUsername)}
+</div>
 
-        <div class="item">
-          ⏱ Connected uptime:
-          ${escapeHtml(uptime)}
-        </div>
+<div class="item">
+⏱ Connected uptime:
+${escapeHtml(uptime)}
+</div>
 
-        <div class="item">
-          ⚠️ Last error:
-          ${escapeHtml(lastError)}
-        </div>
+<div class="item">
+⚠️ Last error:
+${escapeHtml(lastError)}
+</div>
 
-        <div class="item">
-          🚫 Last kick:
-          ${escapeHtml(lastKickReason)}
-        </div>
+<div class="item">
+🚫 Last kick:
+${escapeHtml(lastKick)}
+</div>
 
-        <div class="item">
-          🔌 Last disconnect:
-          ${escapeHtml(lastDisconnectReason)}
-        </div>
+<div class="item">
+🔌 Last disconnect:
+${escapeHtml(lastDisconnect)}
+</div>
 
-      </div>
+</div>
 
-    </body>
+</body>
 
-    </html>
+</html>
   `);
+
 });
 
 
@@ -161,9 +163,9 @@ app.get('/health', (req, res) => {
 
   res.status(200).json({
 
-    webServer: 'online',
+    web: 'online',
 
-    minecraftBot: botStatus,
+    minecraft: botStatus,
 
     server: `${SERVER_HOST}:${SERVER_PORT}`,
 
@@ -174,9 +176,9 @@ app.get('/health', (req, res) => {
 
     lastError,
 
-    lastKickReason,
+    lastKick,
 
-    lastDisconnectReason
+    lastDisconnect
 
   });
 
@@ -189,7 +191,7 @@ app.listen(
   () => {
 
     console.log(
-      `🌐 Web server listening on port ${WEB_PORT}`
+      `🌐 Web server running on port ${WEB_PORT}`
     );
 
   }
@@ -197,7 +199,7 @@ app.listen(
 
 
 // ==================================================
-// START MINECRAFT BOT
+// START BOT
 // ==================================================
 
 function startBot() {
@@ -209,49 +211,29 @@ function startBot() {
   botStatus = 'Connecting';
 
   console.log('');
-  console.log('======================================');
-  console.log('🤖 Starting Minecraft bot');
-  console.log(`🌍 ${SERVER_HOST}:${SERVER_PORT}`);
-  console.log(`👤 ${config.botUsername}`);
-  console.log('======================================');
+  console.log('==============================');
+  console.log('🤖 Starting bot');
+  console.log(`${SERVER_HOST}:${SERVER_PORT}`);
+  console.log('==============================');
 
 
-  try {
+  bot = mineflayer.createBot({
 
-    bot = mineflayer.createBot({
+    host: SERVER_HOST,
 
-      host: SERVER_HOST,
+    port: SERVER_PORT,
 
-      port: SERVER_PORT,
+    username: config.botUsername,
 
-      username: config.botUsername,
+    auth: 'offline',
 
-      auth: 'offline',
+    viewDistance: config.botChunk
 
-      viewDistance: config.botChunk
-
-    });
-
-  } catch (error) {
-
-    botStatus = 'Startup error';
-
-    lastError =
-      error.message || String(error);
-
-    console.error(
-      '❌ Bot creation failed:',
-      error
-    );
-
-    scheduleReconnect();
-
-    return;
-  }
+  });
 
 
   // ================================================
-  // TCP CONNECTION
+  // CONNECTION
   // ================================================
 
   bot.on('connect', () => {
@@ -261,24 +243,21 @@ function startBot() {
     botStatus = 'TCP connected';
 
     console.log(
-      '🔌 TCP connection established.'
+      '🔌 TCP connection established'
     );
 
   });
 
 
-  // ================================================
-  // LOGIN
-  // ================================================
-
   bot.on('login', () => {
 
     if (mySession !== sessionId) return;
 
-    botStatus = 'Logged in, waiting for spawn';
+    botStatus =
+      'Logged in — waiting for spawn';
 
     console.log(
-      '📡 Minecraft login successful.'
+      '📡 Login successful'
     );
 
   });
@@ -292,13 +271,15 @@ function startBot() {
 
     if (mySession !== sessionId) return;
 
+    console.log(
+      `✅ ${config.botUsername} spawned`
+    );
+
     botStatus = 'Spawned and active';
 
     connectedSince = Date.now();
 
-    console.log(
-      `✅ ${config.botUsername} spawned successfully.`
-    );
+    lastError = 'None';
 
 
     bot.clearControlStates();
@@ -324,12 +305,10 @@ function startBot() {
 
     setTimeout(() => {
 
-      if (!isSessionActive(mySession)) {
-        return;
-      }
+      if (!active(mySession)) return;
 
       console.log(
-        '🟢 Movement systems started.'
+        '🟢 Movement started'
       );
 
       chooseMovement(mySession);
@@ -348,31 +327,26 @@ function startBot() {
 
 
   // ================================================
-  // KICK EVENT
+  // KICK
   // ================================================
 
   bot.on('kicked', reason => {
 
     if (mySession !== sessionId) return;
 
-    const readableReason =
-      makeReadable(reason);
+    lastKick = readable(reason);
 
-    lastKickReason =
-      readableReason;
-
-    botStatus =
-      'Kicked from server';
+    botStatus = 'Kicked';
 
     console.log('');
-    console.log('🚫 BOT KICKED');
-    console.log(readableReason);
+    console.log('🚫 KICKED');
+    console.log(lastKick);
 
   });
 
 
   // ================================================
-  // ERROR EVENT
+  // ERROR
   // ================================================
 
   bot.on('error', error => {
@@ -385,39 +359,34 @@ function startBot() {
     botStatus =
       `Error: ${lastError}`;
 
-    console.log('');
-    console.error(
-      '⚠️ BOT ERROR:',
-      error
-    );
+    console.error('');
+    console.error('⚠️ ERROR');
+    console.error(error);
 
   });
 
 
   // ================================================
-  // END EVENT
+  // DISCONNECT
   // ================================================
 
   bot.on('end', reason => {
 
     if (mySession !== sessionId) return;
 
-    const readableReason =
+    lastDisconnect =
       reason
-        ? makeReadable(reason)
-        : 'Unknown reason';
+        ? readable(reason)
+        : 'Unknown';
 
-    lastDisconnectReason =
-      readableReason;
+    connectedSince = null;
 
     botStatus =
       'Disconnected — reconnect scheduled';
 
-    connectedSince = null;
-
     console.log('');
     console.log(
-      `⛔ Disconnected: ${readableReason}`
+      `⛔ Disconnected: ${lastDisconnect}`
     );
 
     stopLoops();
@@ -430,7 +399,7 @@ function startBot() {
 
 
 // ==================================================
-// RECONNECT SYSTEM
+// RECONNECT
 // ==================================================
 
 function scheduleReconnect() {
@@ -438,15 +407,11 @@ function scheduleReconnect() {
   clearTimeout(reconnectTimer);
 
   console.log(
-    `🔄 Reconnecting in ${RECONNECT_DELAY / 1000} seconds...`
+    '🔄 Reconnecting in 30 seconds'
   );
-
 
   reconnectTimer =
     setTimeout(() => {
-
-      botStatus =
-        'Attempting reconnection';
 
       startBot();
 
@@ -456,48 +421,27 @@ function scheduleReconnect() {
 
 
 // ==================================================
-// MOVEMENT SYSTEM
+// MOVEMENT
 // ==================================================
 
 function chooseMovement(mySession) {
 
-  if (!isSessionActive(mySession)) {
-    return;
-  }
+  if (!active(mySession)) return;
 
 
-  // Only reset directional controls.
-  // Jumping remains independent.
+  // Reset directional controls only
 
-  bot.setControlState(
-    'forward',
-    false
-  );
+  bot.setControlState('forward', false);
 
-  bot.setControlState(
-    'back',
-    false
-  );
+  bot.setControlState('back', false);
 
-  bot.setControlState(
-    'left',
-    false
-  );
+  bot.setControlState('left', false);
 
-  bot.setControlState(
-    'right',
-    false
-  );
+  bot.setControlState('right', false);
 
-  bot.setControlState(
-    'sprint',
-    false
-  );
+  bot.setControlState('sprint', false);
 
-  bot.setControlState(
-    'sneak',
-    false
-  );
+  bot.setControlState('sneak', false);
 
 
   const roll = Math.random();
@@ -549,7 +493,7 @@ function chooseMovement(mySession) {
   }
 
 
-  // Left strafe
+  // Left
 
   else if (roll < 0.68) {
 
@@ -561,7 +505,7 @@ function chooseMovement(mySession) {
   }
 
 
-  // Right strafe
+  // Right
 
   else if (roll < 0.78) {
 
@@ -607,7 +551,7 @@ function chooseMovement(mySession) {
   }
 
 
-  // Back
+  // Backward
 
   else if (roll < 0.94) {
 
@@ -619,10 +563,10 @@ function chooseMovement(mySession) {
   }
 
 
-  // Remaining 6% = pause
+  // Remaining probability = stand still
 
 
-  // Occasionally sprint forward
+  // Occasional sprint
 
   if (
     bot.getControlState('forward') &&
@@ -637,49 +581,31 @@ function chooseMovement(mySession) {
   }
 
 
-  const duration =
-    randomInt(
-      1800,
-      6500
-    );
-
-
   movementTimer =
-    setTimeout(() => {
+    setTimeout(
 
-      chooseMovement(
-        mySession
-      );
+      () => chooseMovement(mySession),
 
-    }, duration);
+      randomInt(1800, 6500)
+
+    );
 
 }
 
 
 // ==================================================
-// JUMP SYSTEM
+// JUMPING
 // ==================================================
 
 function scheduleJump(mySession) {
 
-  if (!isSessionActive(mySession)) {
-    return;
-  }
-
-
-  const delay =
-    randomInt(
-      2500,
-      10000
-    );
+  if (!active(mySession)) return;
 
 
   jumpTimer =
     setTimeout(() => {
 
-      if (!isSessionActive(mySession)) {
-        return;
-      }
+      if (!active(mySession)) return;
 
 
       bot.setControlState(
@@ -688,60 +614,38 @@ function scheduleJump(mySession) {
       );
 
 
-      const jumpLength =
-        randomInt(
-          250,
-          550
-        );
-
-
       setTimeout(() => {
 
-        if (!isSessionActive(mySession)) {
-          return;
-        }
+        if (!active(mySession)) return;
 
         bot.setControlState(
           'jump',
           false
         );
 
-      }, jumpLength);
+      }, randomInt(250, 550));
 
 
-      scheduleJump(
-        mySession
-      );
+      scheduleJump(mySession);
 
-    }, delay);
+    }, randomInt(2500, 10000));
 
 }
 
 
 // ==================================================
-// PUNCH / ARM SWING SYSTEM
+// RANDOM ARM SWINGS
 // ==================================================
 
 function schedulePunch(mySession) {
 
-  if (!isSessionActive(mySession)) {
-    return;
-  }
-
-
-  const delay =
-    randomInt(
-      3000,
-      14000
-    );
+  if (!active(mySession)) return;
 
 
   punchTimer =
     setTimeout(() => {
 
-      if (!isSessionActive(mySession)) {
-        return;
-      }
+      if (!active(mySession)) return;
 
 
       try {
@@ -752,67 +656,56 @@ function schedulePunch(mySession) {
             : 'left'
         );
 
-      } catch {
-        // Ignore animation error
-      }
+      } catch {}
 
 
-      // Occasional second swing
+      // Occasional double swing
 
       if (Math.random() < 0.18) {
 
         setTimeout(() => {
 
-          if (!isSessionActive(mySession)) {
-            return;
-          }
+          if (!active(mySession)) return;
 
           try {
 
             bot.swingArm('right');
 
-          } catch {
-            // Ignore
-          }
+          } catch {}
 
         }, randomInt(300, 900));
 
       }
 
 
-      schedulePunch(
-        mySession
-      );
+      schedulePunch(mySession);
 
-    }, delay);
+    }, randomInt(3000, 14000));
 
 }
 
 
 // ==================================================
-// HEAD TARGET SYSTEM
+// HEAD TARGET
 // ==================================================
 
 function chooseHeadTarget(mySession) {
 
-  if (!isSessionActive(mySession)) {
-    return;
-  }
+  if (!active(mySession)) return;
 
+
+  const roll = Math.random();
 
   let maxTurn;
 
-  const turnRoll =
-    Math.random();
 
-
-  if (turnRoll < 0.65) {
+  if (roll < 0.65) {
 
     maxTurn = 35;
 
   }
 
-  else if (turnRoll < 0.90) {
+  else if (roll < 0.90) {
 
     maxTurn = 80;
 
@@ -825,22 +718,19 @@ function chooseHeadTarget(mySession) {
   }
 
 
-  const yawChange =
-    degreesToRadians(
-
-      randomBetween(
-        -maxTurn,
-        maxTurn
-      )
-
-    );
-
-
   targetYaw =
     normalizeAngle(
 
       currentYaw +
-      yawChange
+
+      degreesToRadians(
+
+        randomBetween(
+          -maxTurn,
+          maxTurn
+        )
+
+      )
 
     );
 
@@ -856,21 +746,15 @@ function chooseHeadTarget(mySession) {
     );
 
 
-  const delay =
-    randomInt(
-      1200,
-      6000
-    );
-
-
   headTargetTimer =
-    setTimeout(() => {
+    setTimeout(
 
-      chooseHeadTarget(
-        mySession
-      );
+      () =>
+        chooseHeadTarget(mySession),
 
-    }, delay);
+      randomInt(1200, 6000)
+
+    );
 
 }
 
@@ -881,9 +765,7 @@ function chooseHeadTarget(mySession) {
 
 function smoothHeadLoop(mySession) {
 
-  if (!isSessionActive(mySession)) {
-    return;
-  }
+  if (!active(mySession)) return;
 
 
   const yawDifference =
@@ -917,23 +799,6 @@ function smoothHeadLoop(mySession) {
     smoothing;
 
 
-  const maxPitch =
-    Math.PI / 2;
-
-
-  currentPitch =
-    Math.max(
-
-      -maxPitch,
-
-      Math.min(
-        maxPitch,
-        currentPitch
-      )
-
-    );
-
-
   try {
 
     const result =
@@ -953,34 +818,31 @@ function smoothHeadLoop(mySession) {
       typeof result.catch === 'function'
     ) {
 
-      result.catch(
-        () => {}
-      );
+      result.catch(() => {});
 
     }
 
-  } catch {
-    // Ignore during disconnect
-  }
+  } catch {}
 
 
   headLoopTimer =
-    setTimeout(() => {
+    setTimeout(
 
-      smoothHeadLoop(
-        mySession
-      );
+      () =>
+        smoothHeadLoop(mySession),
 
-    }, 50);
+      50
+
+    );
 
 }
 
 
 // ==================================================
-// SESSION CHECK
+// ACTIVE SESSION CHECK
 // ==================================================
 
-function isSessionActive(mySession) {
+function active(mySession) {
 
   return (
 
@@ -996,36 +858,30 @@ function isSessionActive(mySession) {
 
 
 // ==================================================
-// STOP LOOPS
+// STOP ALL LOOPS
 // ==================================================
 
 function stopLoops() {
 
-  clearTimeout(
-    movementTimer
-  );
+  clearTimeout(movementTimer);
 
-  clearTimeout(
-    jumpTimer
-  );
+  clearTimeout(jumpTimer);
 
-  clearTimeout(
-    punchTimer
-  );
+  clearTimeout(punchTimer);
 
-  clearTimeout(
-    headTargetTimer
-  );
+  clearTimeout(headTargetTimer);
 
-  clearTimeout(
-    headLoopTimer
-  );
+  clearTimeout(headLoopTimer);
 
 
   movementTimer = null;
+
   jumpTimer = null;
+
   punchTimer = null;
+
   headTargetTimer = null;
+
   headLoopTimer = null;
 
 
@@ -1035,9 +891,7 @@ function stopLoops() {
 
       bot.clearControlStates();
 
-    } catch {
-      // Ignore cleanup error
-    }
+    } catch {}
 
   }
 
@@ -1076,9 +930,11 @@ function randomBetween(min, max) {
 function degreesToRadians(degrees) {
 
   return (
+
     degrees *
     Math.PI /
     180
+
   );
 
 }
@@ -1107,7 +963,7 @@ function normalizeAngle(angle) {
 }
 
 
-function makeReadable(value) {
+function readable(value) {
 
   if (typeof value === 'string') {
 
@@ -1118,11 +974,11 @@ function makeReadable(value) {
 
   try {
 
-    return JSON.stringify(
-      value
-    );
+    return JSON.stringify(value);
 
-  } catch {
+  }
+
+  catch {
 
     return String(value);
 
@@ -1131,12 +987,10 @@ function makeReadable(value) {
 }
 
 
-function formatDuration(milliseconds) {
+function formatDuration(ms) {
 
   const seconds =
-    Math.floor(
-      milliseconds / 1000
-    );
+    Math.floor(ms / 1000);
 
 
   const hours =
@@ -1168,36 +1022,21 @@ function escapeHtml(value) {
 
   return String(value)
 
-    .replaceAll(
-      '&',
-      '&amp;'
-    )
+    .replaceAll('&', '&amp;')
 
-    .replaceAll(
-      '<',
-      '&lt;'
-    )
+    .replaceAll('<', '&lt;')
 
-    .replaceAll(
-      '>',
-      '&gt;'
-    )
+    .replaceAll('>', '&gt;')
 
-    .replaceAll(
-      '"',
-      '&quot;'
-    )
+    .replaceAll('"', '&quot;')
 
-    .replaceAll(
-      "'",
-      '&#039;'
-    );
+    .replaceAll("'", '&#039;');
 
 }
 
 
 // ==================================================
-// START BOT
+// GO
 // ==================================================
 
 startBot();
