@@ -1,6 +1,6 @@
 {
-  "serverHost": "example.aternos.me",
-  "serverPort": 12345,
-  "botUsername": "MyBot",
+  "serverHost": "TokiCraftMC.aternos.me",
+  "serverPort": 11625,
+  "botUsername": "Nunya",
   "botChunk": 1
 }
