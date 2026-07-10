@@ -7,7 +7,7 @@ const config = require('./config.json');
 // SETTINGS
 // ==================================================
 
-const SERVER_HOST = 'TokiCraftMC.aternos.me';
+const SERVER_HOST = 'balashark.aternos.host';
 const SERVER_PORT = 11625;
 
 const WEB_PORT = process.env.PORT || 10000;
