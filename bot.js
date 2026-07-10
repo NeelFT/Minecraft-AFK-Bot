@@ -762,4 +762,90 @@ function stopMovementLoops() {
   movementTimer = null;
   jumpTimer = null;
   jumpReleaseTimer = null;
-  punch
+  punchTimer = null;
+  secondPunchTimer = null;
+  headTargetTimer = null;
+  headLoopTimer = null;
+
+  if (bot) {
+    try {
+      bot.clearControlStates();
+    } catch {}
+  }
+
+}
+
+
+// ==================================================
+// WEIGHTED RANDOM CHOICE
+// ==================================================
+
+function weightedChoice(options) {
+
+  const total = options.reduce((sum, option) => sum + option.weight, 0);
+  let roll = Math.random() * total;
+
+  for (const option of options) {
+    roll -= option.weight;
+    if (roll <= 0) return option;
+  }
+
+  return options[options.length - 1];
+
+}
+
+
+// ==================================================
+// HELPERS
+// ==================================================
+
+function randomInt(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function randomBetween(min, max) {
+  return Math.random() * (max - min) + min;
+}
+
+function degreesToRadians(degrees) {
+  return degrees * Math.PI / 180;
+}
+
+function normalizeAngle(angle) {
+  while (angle > Math.PI) angle -= Math.PI * 2;
+  while (angle < -Math.PI) angle += Math.PI * 2;
+  return angle;
+}
+
+function readable(value) {
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function formatMilliseconds(milliseconds) {
+  const seconds = Math.floor(milliseconds / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  const ms = milliseconds % 1000;
+  return `${minutes}m ${remainingSeconds}.${String(ms).padStart(3, '0')}s`;
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
+
+// ==================================================
+// START
+// ==================================================
+
+startBot();
