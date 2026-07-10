@@ -1,3 +1,4 @@
+
 const mineflayer = require('mineflayer');
 const express = require('express');
 const config = require('./config.json');
@@ -8,11 +9,17 @@ const config = require('./config.json');
 // ==================================================
 
 const WEB_PORT = process.env.PORT || 10000;
+
+const SERVER_HOST = 'balashark.aternos.host';
+const SERVER_PORT = 11625;
+
+// Only used AFTER a real disconnect.
+// This does not disconnect the bot.
 const RECONNECT_DELAY = 30000;
 
 
 // ==================================================
-// WEB SERVER + STATUS STATE
+// WEB SERVER
 // ==================================================
 
 const app = express();
@@ -25,7 +32,6 @@ let currentBehavior = 'Waiting';
 let connectionStartedAt = null;
 let connectionCompletedAt = null;
 let connectedSince = null;
-
 let lastConnectionTime = null;
 
 let lastError = 'None';
@@ -106,12 +112,7 @@ h1 {
 
 
 <div class="status">
-
-Status:
-<span id="status">
-${escapeHtml(botStatus)}
-</span>
-
+Status: ${escapeHtml(botStatus)}
 </div>
 
 
@@ -133,15 +134,11 @@ Calculating...
 
 ⚡ Last successful connection time:
 
-<span id="lastConnectionTime">
-
 ${
   lastConnectionTime === null
     ? 'No successful connection yet'
     : formatMilliseconds(lastConnectionTime)
 }
-
-</span>
 
 </div>
 
@@ -170,7 +167,7 @@ ${escapeHtml(currentBehavior)}
 
 🌍 Server:
 
-${escapeHtml(config.serverHost)}:${escapeHtml(config.serverPort)}
+${escapeHtml(SERVER_HOST)}:${SERVER_PORT}
 
 </div>
 
@@ -225,7 +222,7 @@ const connectedSince =
   ${connectedSince || 'null'};
 
 
-function format(ms) {
+function formatTime(ms) {
 
   if (ms < 0) ms = 0;
 
@@ -238,7 +235,7 @@ function format(ms) {
   const seconds =
     totalSeconds % 60;
 
-  const milliseconds =
+  const tenths =
     Math.floor((ms % 1000) / 100);
 
 
@@ -247,7 +244,7 @@ function format(ms) {
     'm ' +
     seconds +
     '.' +
-    milliseconds +
+    tenths +
     's'
   );
 
@@ -257,7 +254,6 @@ function format(ms) {
 function updateTimers() {
 
   const now = Date.now();
-
 
   const connectionTimer =
     document.getElementById(
@@ -271,9 +267,8 @@ function updateTimers() {
   ) {
 
     connectionTimer.textContent =
-      format(
-        now -
-        connectionStartedAt
+      formatTime(
+        now - connectionStartedAt
       );
 
   }
@@ -284,11 +279,10 @@ function updateTimers() {
   ) {
 
     connectionTimer.textContent =
-      format(
+      formatTime(
         connectionCompletedAt -
         connectionStartedAt
-      ) +
-      ' ✓';
+      ) + ' ✓';
 
   }
 
@@ -309,9 +303,8 @@ function updateTimers() {
   if (connectedSince) {
 
     uptime.textContent =
-      format(
-        now -
-        connectedSince
+      formatTime(
+        now - connectedSince
       );
 
   }
@@ -357,6 +350,9 @@ app.get('/health', (req, res) => {
 
     behavior: currentBehavior,
 
+    server:
+      `${SERVER_HOST}:${SERVER_PORT}`,
+
     connectionStartedAt,
 
     connectionCompletedAt,
@@ -390,7 +386,7 @@ app.listen(
 
 
 // ==================================================
-// BOT STATE
+// BOT ENGINE STATE
 // ==================================================
 
 let sessionId = 0;
@@ -432,10 +428,8 @@ function startBot() {
   connectionStartedAt =
     Date.now();
 
-
   connectionCompletedAt =
     null;
-
 
   connectedSince =
     null;
@@ -443,7 +437,6 @@ function startBot() {
 
   botStatus =
     'Connecting';
-
 
   currentBehavior =
     'Waiting for connection';
@@ -460,7 +453,7 @@ function startBot() {
   );
 
   console.log(
-    `🌍 ${config.serverHost}:${config.serverPort}`
+    `🌍 ${SERVER_HOST}:${SERVER_PORT}`
   );
 
   console.log(
@@ -473,16 +466,14 @@ function startBot() {
 
 
   // ==================================================
-  // WORKING CONNECTION CONFIG
+  // CONNECTION
   // ==================================================
 
   bot = mineflayer.createBot({
 
-    host:
-      config.serverHost,
+    host: SERVER_HOST,
 
-    port:
-      config.serverPort,
+    port: SERVER_PORT,
 
     username:
       config.botUsername,
@@ -615,22 +606,15 @@ function startBot() {
     currentYaw =
       bot.entity.yaw;
 
-
     currentPitch =
       bot.entity.pitch;
-
 
     targetYaw =
       currentYaw;
 
-
     targetPitch =
       currentPitch;
 
-
-    /*
-      Start almost immediately after spawn.
-    */
 
     setTimeout(() => {
 
@@ -652,21 +636,17 @@ function startBot() {
         mySession
       );
 
-
       scheduleJump(
         mySession
       );
-
 
       schedulePunch(
         mySession
       );
 
-
       chooseHeadTarget(
         mySession
       );
-
 
       smoothHeadLoop(
         mySession
@@ -679,7 +659,7 @@ function startBot() {
 
 
   // ==================================================
-  // KICKED
+  // KICK
   // ==================================================
 
   bot.on('kicked', reason => {
@@ -778,11 +758,7 @@ function startBot() {
     console.log('');
 
     console.log(
-
-      `⛔ Disconnected: ${
-        lastDisconnect
-      }`
-
+      `⛔ Disconnected: ${lastDisconnect}`
     );
 
 
@@ -795,11 +771,7 @@ function startBot() {
 
 
     console.log(
-
-      `🔄 Reconnecting in ${
-        RECONNECT_DELAY / 1000
-      } seconds...`
-
+      `🔄 Reconnecting in ${RECONNECT_DELAY / 1000} seconds...`
     );
 
 
@@ -816,7 +788,7 @@ function startBot() {
 
 
 // ==================================================
-// MOVEMENT PROFILES
+// MOVEMENT OPTIONS
 // ==================================================
 
 const movements = [
@@ -889,12 +861,6 @@ function chooseMovement(
   }
 
 
-  /*
-    Reset only directional controls.
-
-    Jumping and punching remain independent.
-  */
-
   setControl(
     'forward',
     false
@@ -929,10 +895,6 @@ function chooseMovement(
   let selected;
 
 
-  /*
-    Don't repeat the immediately previous movement.
-  */
-
   do {
 
     selected =
@@ -941,10 +903,8 @@ function chooseMovement(
       );
 
   } while (
-
     selected.name ===
     lastMovement
-
   );
 
 
@@ -964,10 +924,6 @@ function chooseMovement(
 
   }
 
-
-  /*
-    Occasional sprint while moving forward.
-  */
 
   if (
 
@@ -999,11 +955,8 @@ function chooseMovement(
 
 
   /*
-    Longer continuous movements.
-
-    6 to 15 seconds.
-
-    No deliberate standing-still phase.
+    Long movement periods.
+    No intentional pause.
   */
 
   const duration =
@@ -1190,7 +1143,7 @@ function schedulePunch(
 
 
 // ==================================================
-// HEAD TARGETS
+// HEAD TARGET SYSTEM
 // ==================================================
 
 function chooseHeadTarget(
@@ -1486,7 +1439,7 @@ function stopMovementLoops() {
 
 
 // ==================================================
-// WEIGHTED CHOICE
+// WEIGHTED RANDOM CHOICE
 // ==================================================
 
 function weightedChoice(
