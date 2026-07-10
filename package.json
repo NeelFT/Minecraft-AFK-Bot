@@ -10,6 +10,7 @@
   "license": "MIT",
   "dependencies": {
   "mineflayer": "^4.22.0",
+  "mineflayer-anti-afk": "^1.3.0",
   "minecraft-data": "latest",
   "express": "^4.19.0"
   }
