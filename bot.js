@@ -1,6 +1,6 @@
 const mineflayer = require('mineflayer');
-const config = require('./config.json');
 const express = require('express');
+const dns = require('dns').promises; // Built-in node system to look up hidden ports
 
 // 1. Render Keep-Alive Web Server
 const app = express();
@@ -9,53 +9,64 @@ app.get('/', (req, res) => res.send('Bot is active!'));
 app.listen(port, () => console.log(`Web Listener active on port ${port}`));
 
 let bot;
-let targetYaw = 0;
-let targetPitch = 0;
-let currentYaw = 0;
-let currentPitch = 0;
-let behaviorTicks = 0;
+let targetYaw = 0, targetPitch = 0, currentYaw = 0, currentPitch = 0, behaviorTicks = 0;
 
-function initBot() {
-  console.log(`Connecting to server: ${config.serverHost}:${config.serverPort}...`);
-  
+// THE PERMANENT DOMAIN NAME
+const PERMANENT_DOMAIN = 'TokiCraftMC.aternos.me';
+const BOT_NAME = 'Nunya';
+
+async function initBot() {
+  let finalHost = PERMANENT_DOMAIN;
+  let finalPort = 25565; // Default fallback port
+
+  console.log(`🔍 Resolving hidden Aternos network ports for ${PERMANENT_DOMAIN}...`);
+
+  try {
+    // Automatically looks up the background tracking system (SRV record) just like standard Minecraft does
+    const records = await dns.resolveSrv('_minecraft._tcp.' + PERMANENT_DOMAIN);
+    if (records && records.length > 0) {
+      finalHost = records[0].name;
+      finalPort = records[0].port;
+      console.log(`🎯 Found active node! Host: ${finalHost} | Port: ${finalPort}`);
+    }
+  } catch (err) {
+    console.log('⚠️ SRV Lookup failed (Server might be sleeping). Falling back to basic domain entries...');
+  }
+
+  // Build the bot using the automatically discovered live numbers
   bot = mineflayer.createBot({
-    host: config.serverHost,
-    port: config.serverPort,
-    username: config.botUsername,
+    host: finalHost,
+    port: finalPort,
+    username: BOT_NAME,
     auth: 'offline',
     version: "1.21.11",
-    viewDistance: config.botChunk
+    viewDistance: 1
+  });
+
+  bot.on('login', () => {
+    console.log(`📡 Handshake successful! ${BOT_NAME} cleared the proxy proxy.`);
   });
 
   bot.on('spawn', () => {
     setTimeout(() => {
       if (!bot) return;
       bot.setControlState('sneak', false); 
-      console.log(`✅ ${config.botUsername} has logged into the world!`);
+      console.log(`✅ ${BOT_NAME} has spawned into the world layout!`);
       bot.on('physicsTick', continuousSmoothEngine);
     }, 3000);
   });
 
-  // 2. TIMEOUT PROTECTION: Safely catch network connection bugs
   bot.on('error', (err) => {
-    console.error('⚠️ Network Error Detected:', err.message);
-    if (err.code === 'ETIMEDOUT' || err.code === 'ECONNREFUSED') {
-      console.log('Server appears to be offline. Retrying in 45 seconds...');
-    }
+    console.error('⚠️ Network Error:', err.message);
   });
 
-  // 3. Keep-Alive Restart Loop
   bot.on('end', () => {
-    console.log('⛔️ Connection closed. Re-establishing link profile in 45 seconds...');
-    
-    // Completely wipe old instance maps before re-initializing
+    console.log('⛔️ Connection dropped. Running fresh network discovery scan in 45 seconds...');
     if (bot) {
       bot.removeAllListeners();
       bot = null;
     }
-    
-    // Safely attempt a clean fresh reconnection route
-    setTimeout(initBot, 45000); 
+    setTimeout(initBot, 45000); // Tries again, reading the brand new port if it changed!
   });
 }
 
