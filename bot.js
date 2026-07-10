@@ -10,6 +10,13 @@ app.listen(port, () => console.log(`Web Listener active on port ${port}`));
 
 let bot;
 
+// Behavior state tracking variables
+let targetYaw = 0;
+let targetPitch = 0;
+let currentYaw = 0;
+let currentPitch = 0;
+let behaviorTicks = 0;
+
 function initBot() {
   console.log(`Attempting to connect ${config.botUsername}...`);
   
@@ -24,10 +31,11 @@ function initBot() {
 
   bot.on('spawn', () => {
     setTimeout(() => {
-      bot.setControlState('sneak', false);
+      bot.setControlState('sneak', false); // Forces the bot to stand tall
       console.log(`✅ ${config.botUsername} has logged into the world!`);
-      // Start the unpredictable human simulation loop
-      humanBehaviorLoop();
+      
+      // Hook into Minecraft's internal physics engine (Runs 20 times per second)
+      bot.on('physicsTick', continuousSmoothEngine);
     }, 3000);
   });
 
@@ -39,46 +47,57 @@ function initBot() {
   });
 }
 
-// 2. Human Behavior Emulation Engine
-function humanBehaviorLoop() {
+// 2. High-Frequency Smooth Movement Engine
+function continuousSmoothEngine() {
   if (!bot || !bot.entity) return;
 
-  const choice = Math.random();
+  // --- PART A: CONSTANT & SMOOTH CAMERA ROTATION ---
+  // Slowly interpolate current camera angles toward the target angles (0.05 step weight)
+  currentYaw += (targetYaw - currentYaw) * 0.05;
+  currentPitch += (targetPitch - currentPitch) * 0.05;
+  bot.look(currentYaw, currentPitch, true);
 
-  // Reset all prior movement states before generating a new one
-  bot.clearControlStates();
-  bot.setControlState('sneak', false); // Keep sneaking to muffle footstep checks
+  // --- PART B: RANDOM DIRECTION DECISIONS ---
+  // Every 40 game ticks (roughly 2 seconds), seamlessly morph the goals
+  if (behaviorTicks <= 0) {
+    // Pick a brand new random direction vector (0 to 360 degrees)
+    targetYaw = (Math.random() * 360) * (Math.PI / 180);
+    targetPitch = ((Math.random() * 30) - 15) * (Math.PI / 180); // Natural horizon drift
 
-  if (choice < 0.25) {
-    // Action A: Take a few steps forward
-    bot.setControlState('forward', true);
-    setTimeout(() => bot.setControlState('forward', false), Math.floor(Math.random() * 800) + 200);
+    // Wipe previous movement keys
+    bot.clearControlStates();
+    bot.setControlState('sneak', false);
 
-  } else if (choice < 0.50) {
-    // Action B: Randomly jump or strafe sideways
-    const side = Math.random() > 0.5 ? 'left' : 'right';
-    bot.setControlState(side, true);
-    if (Math.random() > 0.6) bot.setControlState('jump', true);
-    
-    setTimeout(() => {
-      bot.clearControlStates();
-      bot.setControlState('sneak', true);
-    }, Math.floor(Math.random() * 600) + 200);
+    // Roll dice for constant constant movement styles
+    const movementStrategy = Math.random();
+    if (movementStrategy < 0.4) {
+      // Strategy 1: Constant forward pathing
+      bot.setControlState('forward', true);
+    } else if (movementStrategy < 0.7) {
+      // Strategy 2: Constant smooth strafe (sideways drift)
+      const side = Math.random() > 0.5 ? 'left' : 'right';
+      bot.setControlState(side, true);
+    } else {
+      // Strategy 3: Smooth backward backing away
+      bot.setControlState('back', true);
+    }
 
-  } else if (choice < 0.75) {
-    // Action C: Turn head around naturally (Crucial for bypass)
-    const yaw = (Math.random() * 360) * (Math.PI / 180);
-    const pitch = ((Math.random() * 40) - 20) * (Math.PI / 180);
-    bot.look(yaw, pitch, true);
+    // Small random chance to trigger a jump mid-movement frame
+    if (Math.random() > 0.75) {
+      bot.setControlState('jump', true);
+    }
 
-  } else {
-    // Action D: Swing hand arms naturally
-    bot.swingArm('right');
+    // Unpredictable arm swinging
+    if (Math.random() > 0.5) {
+      bot.swingArm('right');
+    }
+
+    // Set how long the bot maintains this precise smooth path (between 1.5 to 4 seconds)
+    behaviorTicks = Math.floor(Math.random() * 50) + 30;
   }
 
-  // Generate completely random wait intervals between 2 to 7 seconds
-  const nextInterval = Math.floor(Math.random() * 5000) + 2000;
-  setTimeout(humanBehaviorLoop, nextInterval);
+  // Count down game ticks
+  behaviorTicks--;
 }
 
 initBot();
