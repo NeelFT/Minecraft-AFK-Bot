@@ -1,7 +1,9 @@
 {
-  "serverHost": "TokiCraftMC.aternos.me",
-  "serverPort": 11625,
-  "botUsername": "Nunya",
-  "botChunk": 1,
-  "version": "1.21.11"
+  "botUsername": "Nunyo",
+  "botChunk": 6,
+
+  "_comment_operators": "Minecraft doesn't tell clients who is actually op unless a permissions plugin broadcasts it, so this is a manual allowlist. Only usernames listed here can control the bot via /msg.",
+  "operators": [
+    ".Neel YT3048"
+  ]
 }
