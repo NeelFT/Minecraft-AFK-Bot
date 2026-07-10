@@ -6,7 +6,7 @@ const bot = mineflayer.createBot({
   port: config.serverPort,
   username: config.botUsername,
   auth: 'offline',
-  version: "1.21.11",
+  version: "26.2",
   viewDistance: config.botChunk
 });
 
