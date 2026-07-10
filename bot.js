@@ -9,7 +9,7 @@ const config = require('./config.json');
 
 const WEB_PORT = process.env.PORT || 10000;
 
-const SERVER_HOST = 'balashark.aternos.host';
+const SERVER_HOST = 'TokiCraftMC.aternos.me';
 const SERVER_PORT = 11625;
 
 // Only used AFTER a real disconnect.
