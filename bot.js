@@ -2,39 +2,52 @@ const mineflayer = require('mineflayer');
 const express = require('express');
 const config = require('./config.json');
 
-
-// ==================================================
-// SETTINGS
-// ==================================================
-
+const app = express();
 const WEB_PORT = process.env.PORT || 10000;
 const RECONNECT_DELAY = 15000;
 
 
-// ==================================================
-// WEB SERVER
-// ==================================================
-
-const app = express();
+// ======================================================
+// STATE
+// ======================================================
 
 let bot = null;
 
-let botStatus = 'Starting';
-let currentBehavior = 'Waiting';
+let status = 'Starting';
+let behavior = 'None';
+let connectedSince = null;
+
 let lastError = 'None';
 let lastKick = 'None';
 let lastDisconnect = 'None';
-let connectedSince = null;
+
+let generation = 0;
+let engineRunning = false;
+
+let movementTimer = null;
+let jumpTimer = null;
+let punchTimer = null;
+let headTargetTimer = null;
+let headLoopTimer = null;
+let reconnectTimer = null;
+
+let currentYaw = 0;
+let currentPitch = 0;
+
+let targetYaw = 0;
+let targetPitch = 0;
+
+let recentMovements = [];
 
 
-// ==================================================
-// STATUS PAGE
-// ==================================================
+// ======================================================
+// WEB STATUS PAGE
+// ======================================================
 
 app.get('/', (req, res) => {
 
   const uptime = connectedSince
-    ? formatDuration(Date.now() - connectedSince)
+    ? formatTime(Date.now() - connectedSince)
     : 'Not connected';
 
   res.status(200).send(`
@@ -66,7 +79,7 @@ body {
   max-width: 650px;
   margin: auto;
   background: #1d1d1d;
-  padding: 24px;
+  padding: 25px;
   border-radius: 16px;
   line-height: 1.7;
 }
@@ -76,7 +89,7 @@ h1 {
 }
 
 .status {
-  font-size: 22px;
+  font-size: 23px;
   font-weight: bold;
 }
 
@@ -89,7 +102,6 @@ h1 {
 
 </head>
 
-
 <body>
 
 <div class="card">
@@ -97,42 +109,41 @@ h1 {
 <h1>🤖 Nunya Bot Status</h1>
 
 <div class="status">
-Status: ${escapeHtml(botStatus)}
+Status: ${safe(status)}
 </div>
 
 <div class="item">
-🏃 Current behavior:
-${escapeHtml(currentBehavior)}
+🏃 Behavior: ${safe(behavior)}
 </div>
 
 <div class="item">
 🌍 Server:
-${escapeHtml(config.serverHost)}:${escapeHtml(config.serverPort)}
+${safe(config.serverHost)}:${safe(config.serverPort)}
 </div>
 
 <div class="item">
 👤 Username:
-${escapeHtml(config.botUsername)}
+${safe(config.botUsername)}
 </div>
 
 <div class="item">
-⏱ Connected uptime:
-${escapeHtml(uptime)}
+⏱ Uptime:
+${safe(uptime)}
 </div>
 
 <div class="item">
 ⚠️ Last error:
-${escapeHtml(lastError)}
+${safe(lastError)}
 </div>
 
 <div class="item">
 🚫 Last kick:
-${escapeHtml(lastKick)}
+${safe(lastKick)}
 </div>
 
 <div class="item">
 🔌 Last disconnect:
-${escapeHtml(lastDisconnect)}
+${safe(lastDisconnect)}
 </div>
 
 </div>
@@ -141,7 +152,6 @@ ${escapeHtml(lastDisconnect)}
 
 </html>
   `);
-
 });
 
 
@@ -149,20 +159,19 @@ app.get('/health', (req, res) => {
 
   res.status(200).json({
 
-    webServer: 'online',
+    web: 'online',
 
-    botStatus,
+    status,
 
-    currentBehavior,
+    behavior,
 
     connected:
-      botStatus === 'Spawned and active',
+      status === 'Spawned and active',
 
-    username:
-      config.botUsername,
-
-    server:
-      `${config.serverHost}:${config.serverPort}`,
+    uptime:
+      connectedSince
+        ? Date.now() - connectedSince
+        : null,
 
     lastError,
 
@@ -188,66 +197,39 @@ app.listen(
 );
 
 
-// ==================================================
-// ENGINE STATE
-// ==================================================
-
-let sessionId = 0;
-
-let movementTimer = null;
-let jumpTimer = null;
-let swingTimer = null;
-let headTargetTimer = null;
-let headLoopTimer = null;
-let reconnectTimer = null;
-
-let movementEngineRunning = false;
-
-let currentYaw = 0;
-let currentPitch = 0;
-
-let targetYaw = 0;
-let targetPitch = 0;
-
-
-// Remember recent movement choices
-// so the same patterns are less likely to repeat.
-
-let movementHistory = [];
-
-
-// ==================================================
-// START BOT
-// ==================================================
+// ======================================================
+// CREATE BOT
+// ======================================================
 
 function startBot() {
 
-  sessionId++;
+  generation++;
 
-  const mySession = sessionId;
+  const myGeneration = generation;
 
-  botStatus = 'Connecting';
-  currentBehavior = 'Connecting';
+  status = 'Connecting';
+  behavior = 'Waiting for connection';
 
   console.log('');
   console.log('====================================');
-  console.log('🤖 Starting Nunya');
+  console.log('🤖 Starting bot');
   console.log(
     `🌍 ${config.serverHost}:${config.serverPort}`
+  );
+  console.log(
+    `👤 ${config.botUsername}`
   );
   console.log('====================================');
 
 
-  // ==================================================
-  // WORKING CONNECTION CONFIGURATION
-  // DO NOT CHANGE THIS SECTION
-  // ==================================================
+  // IMPORTANT:
+  // This is the connection structure that worked before.
 
   bot = mineflayer.createBot({
 
     host: config.serverHost,
 
-    port: config.serverPort,
+    port: Number(config.serverPort),
 
     username: config.botUsername,
 
@@ -260,15 +242,15 @@ function startBot() {
   });
 
 
-  // ==================================================
-  // CONNECTION EVENTS
-  // ==================================================
+  // ====================================================
+  // CONNECT
+  // ====================================================
 
   bot.on('connect', () => {
 
-    if (mySession !== sessionId) return;
+    if (myGeneration !== generation) return;
 
-    botStatus = 'TCP connected';
+    status = 'TCP connected';
 
     console.log(
       '🔌 TCP connected'
@@ -277,11 +259,15 @@ function startBot() {
   });
 
 
+  // ====================================================
+  // LOGIN
+  // ====================================================
+
   bot.on('login', () => {
 
-    if (mySession !== sessionId) return;
+    if (myGeneration !== generation) return;
 
-    botStatus =
+    status =
       'Logged in — waiting for spawn';
 
     console.log(
@@ -291,17 +277,25 @@ function startBot() {
   });
 
 
-  // ==================================================
+  // ====================================================
   // SPAWN
-  // ==================================================
+  // ====================================================
 
   bot.on('spawn', () => {
 
-    if (mySession !== sessionId) return;
+    if (myGeneration !== generation) return;
 
 
-    botStatus =
+    console.log(
+      `✅ ${config.botUsername} spawned`
+    );
+
+
+    status =
       'Spawned and active';
+
+    behavior =
+      'Preparing movement';
 
     connectedSince =
       Date.now();
@@ -310,25 +304,21 @@ function startBot() {
       'None';
 
 
-    console.log(
-      `✅ ${config.botUsername} spawned`
-    );
+    // Kill any previous behavior timers first.
+
+    stopBehavior();
 
 
-    /*
-      Prevent multiple movement engines
-      from starting on repeated spawn events.
-    */
+    try {
 
-    stopMovementEngine();
+      bot.clearControlStates();
 
+      bot.setControlState(
+        'sneak',
+        false
+      );
 
-    bot.clearControlStates();
-
-    bot.setControlState(
-      'sneak',
-      false
-    );
+    } catch {}
 
 
     currentYaw =
@@ -346,80 +336,91 @@ function startBot() {
 
     setTimeout(() => {
 
-      if (!active(mySession)) return;
+      if (
+        myGeneration !== generation ||
+        !bot ||
+        !bot.entity
+      ) {
+        return;
+      }
 
-      startMovementEngine(
-        mySession
+
+      startBehavior(
+        myGeneration
       );
 
-    }, 2000);
+    }, 1500);
 
   });
 
 
-  // ==================================================
+  // ====================================================
   // KICK
-  // ==================================================
+  // ====================================================
 
   bot.on('kicked', reason => {
 
-    if (mySession !== sessionId) return;
+    if (myGeneration !== generation) return;
+
 
     lastKick =
       readable(reason);
 
-    botStatus =
+    status =
       'Kicked';
 
+
     console.log('');
-    console.log('🚫 KICKED');
+    console.log('🚫 KICKED:');
     console.log(lastKick);
 
   });
 
 
-  // ==================================================
+  // ====================================================
   // ERROR
-  // ==================================================
+  // ====================================================
 
   bot.on('error', error => {
 
-    if (mySession !== sessionId) return;
+    if (myGeneration !== generation) return;
+
 
     lastError =
-      error.message ||
+      error?.message ||
       String(error);
 
+
     console.log('');
-    console.error(
-      '⚠️ CONNECTION ERROR:',
-      lastError
+    console.log(
+      `⚠️ ERROR: ${lastError}`
     );
 
   });
 
 
-  // ==================================================
-  // CONNECTION ENDED
-  // ==================================================
+  // ====================================================
+  // CONNECTION END
+  // ====================================================
 
   bot.on('end', reason => {
 
-    if (mySession !== sessionId) return;
+    if (myGeneration !== generation) return;
 
 
     lastDisconnect =
-      reason
-        ? readable(reason)
-        : 'Unknown reason';
+      readable(
+        reason || 'Unknown reason'
+      );
 
 
-    connectedSince = null;
+    connectedSince =
+      null;
 
-    botStatus =
+    status =
       'Disconnected — reconnect scheduled';
 
-    currentBehavior =
+    behavior =
       'Disconnected';
 
 
@@ -429,110 +430,600 @@ function startBot() {
     );
 
 
-    stopMovementEngine();
+    stopBehavior();
 
 
-    /*
-      This does NOT intentionally disconnect the bot.
+    clearTimeout(
+      reconnectTimer
+    );
 
-      This only runs AFTER an external disconnect
-      has already happened.
-    */
 
-    scheduleReconnect();
+    reconnectTimer =
+      setTimeout(() => {
+
+        startBot();
+
+      }, RECONNECT_DELAY);
 
   });
 
 }
 
 
-// ==================================================
-// RECONNECT
-// ==================================================
+// ======================================================
+// START BEHAVIOR ENGINE
+// ======================================================
 
-function scheduleReconnect() {
-
-  clearTimeout(
-    reconnectTimer
-  );
-
-
-  console.log(
-    `🔄 Reconnecting in ${RECONNECT_DELAY / 1000} seconds`
-  );
-
-
-  reconnectTimer =
-    setTimeout(() => {
-
-      startBot();
-
-    }, RECONNECT_DELAY);
-
-}
-
-
-// ==================================================
-// START MOVEMENT ENGINE
-// ==================================================
-
-function startMovementEngine(mySession) {
-
-  if (!active(mySession)) return;
-
-  if (movementEngineRunning) return;
-
-
-  movementEngineRunning = true;
-
-
-  console.log(
-    '🟢 Movement engine active'
-  );
-
-
-  chooseLongMovement(
-    mySession
-  );
-
-  scheduleJump(
-    mySession
-  );
-
-  scheduleSwing(
-    mySession
-  );
-
-  chooseHeadTarget(
-    mySession
-  );
-
-  smoothHeadLoop(
-    mySession
-  );
-
-}
-
-
-// ==================================================
-// LONG MOVEMENT SYSTEM
-// ==================================================
-
-function chooseLongMovement(mySession) {
+function startBehavior(myGeneration) {
 
   if (
-    !active(mySession) ||
-    !movementEngineRunning
+    !isActive(myGeneration) ||
+    engineRunning
   ) {
     return;
   }
 
 
-  /*
-    Do not touch jump here.
+  engineRunning =
+    true;
 
-    Jumping is independent.
-  */
+
+  console.log(
+    '🟢 Behavior engine started'
+  );
+
+
+  chooseMovement(
+    myGeneration
+  );
+
+  scheduleJump(
+    myGeneration
+  );
+
+  schedulePunch(
+    myGeneration
+  );
+
+  chooseHeadTarget(
+    myGeneration
+  );
+
+  smoothHeadLoop(
+    myGeneration
+  );
+
+}
+
+
+// ======================================================
+// MOVEMENT OPTIONS
+// ======================================================
+
+const movementOptions = [
+
+  {
+    id: 'forward',
+    name: 'Walking forward',
+    controls: ['forward'],
+    weight: 24
+  },
+
+  {
+    id: 'forwardLeft',
+    name: 'Walking diagonally left',
+    controls: ['forward', 'left'],
+    weight: 18
+  },
+
+  {
+    id: 'forwardRight',
+    name: 'Walking diagonally right',
+    controls: ['forward', 'right'],
+    weight: 18
+  },
+
+  {
+    id: 'left',
+    name: 'Strafing left',
+    controls: ['left'],
+    weight: 8
+  },
+
+  {
+    id: 'right',
+    name: 'Strafing right',
+    controls: ['right'],
+    weight: 8
+  },
+
+  {
+    id: 'backLeft',
+    name: 'Backing diagonally left',
+    controls: ['back', 'left'],
+    weight: 5
+  },
+
+  {
+    id: 'backRight',
+    name: 'Backing diagonally right',
+    controls: ['back', 'right'],
+    weight: 5
+  },
+
+  {
+    id: 'back',
+    name: 'Walking backward',
+    controls: ['back'],
+    weight: 4
+  },
+
+  {
+    id: 'pause',
+    name: 'Brief pause',
+    controls: [],
+    weight: 1
+  }
+
+];
+
+
+// ======================================================
+// LONG CONTINUOUS MOVEMENT
+// ======================================================
+
+function chooseMovement(myGeneration) {
+
+  if (!behaviorActive(myGeneration)) {
+    return;
+  }
+
+
+  resetMovementControls();
+
+
+  let choice = null;
+
+  let attempts = 0;
+
+
+  // Avoid recent repetition.
+
+  do {
+
+    choice =
+      weightedChoice(
+        movementOptions
+      );
+
+    attempts++;
+
+  } while (
+
+    recentMovements.includes(
+      choice.id
+    ) &&
+
+    attempts < 20
+
+  );
+
+
+  recentMovements.push(
+    choice.id
+  );
+
+
+  // Remember previous 3 movements.
+
+  if (
+    recentMovements.length > 3
+  ) {
+
+    recentMovements.shift();
+
+  }
+
+
+  for (
+    const control of choice.controls
+  ) {
+
+    bot.setControlState(
+      control,
+      true
+    );
+
+  }
+
+
+  // Occasional sprint while moving forward.
+
+  const canSprint =
+    choice.controls.includes(
+      'forward'
+    );
+
+
+  if (
+    canSprint &&
+    Math.random() < 0.16
+  ) {
+
+    bot.setControlState(
+      'sprint',
+      true
+    );
+
+
+    behavior =
+      `${choice.name} + sprinting`;
+
+  }
+
+  else {
+
+    behavior =
+      choice.name;
+
+  }
+
+
+  let duration;
+
+
+  if (
+    choice.id === 'pause'
+  ) {
+
+    // Very short, rare pause.
+
+    duration =
+      randomInt(
+        700,
+        1800
+      );
+
+  }
+
+  else {
+
+    // Long movement periods.
+
+    duration =
+      randomInt(
+        6000,
+        16000
+      );
+
+  }
+
+
+  movementTimer =
+    setTimeout(() => {
+
+      chooseMovement(
+        myGeneration
+      );
+
+    }, duration);
+
+}
+
+
+// ======================================================
+// JUMP SYSTEM
+// ======================================================
+
+function scheduleJump(myGeneration) {
+
+  if (!behaviorActive(myGeneration)) {
+    return;
+  }
+
+
+  const delay =
+    randomInt(
+      4000,
+      15000
+    );
+
+
+  jumpTimer =
+    setTimeout(() => {
+
+      if (!behaviorActive(myGeneration)) {
+        return;
+      }
+
+
+      try {
+
+        bot.setControlState(
+          'jump',
+          true
+        );
+
+
+        setTimeout(() => {
+
+          if (!isActive(myGeneration)) {
+            return;
+          }
+
+
+          try {
+
+            bot.setControlState(
+              'jump',
+              false
+            );
+
+          } catch {}
+
+        }, randomInt(250, 500));
+
+
+      } catch {}
+
+
+      scheduleJump(
+        myGeneration
+      );
+
+    }, delay);
+
+}
+
+
+// ======================================================
+// PUNCH SYSTEM
+// ======================================================
+
+function schedulePunch(myGeneration) {
+
+  if (!behaviorActive(myGeneration)) {
+    return;
+  }
+
+
+  const delay =
+    randomInt(
+      3500,
+      16000
+    );
+
+
+  punchTimer =
+    setTimeout(() => {
+
+      if (!behaviorActive(myGeneration)) {
+        return;
+      }
+
+
+      try {
+
+        bot.swingArm(
+          Math.random() < 0.92
+            ? 'right'
+            : 'left'
+        );
+
+      } catch {}
+
+
+      // Occasional second swing.
+
+      if (
+        Math.random() < 0.13
+      ) {
+
+        setTimeout(() => {
+
+          if (!isActive(myGeneration)) {
+            return;
+          }
+
+
+          try {
+
+            bot.swingArm(
+              'right'
+            );
+
+          } catch {}
+
+        }, randomInt(350, 1000));
+
+      }
+
+
+      schedulePunch(
+        myGeneration
+      );
+
+    }, delay);
+
+}
+
+
+// ======================================================
+// HEAD TARGET SELECTION
+// ======================================================
+
+function chooseHeadTarget(myGeneration) {
+
+  if (!behaviorActive(myGeneration)) {
+    return;
+  }
+
+
+  const roll =
+    Math.random();
+
+
+  let turnSize;
+
+
+  if (roll < 0.72) {
+
+    turnSize =
+      randomBetween(
+        8,
+        35
+      );
+
+  }
+
+  else if (roll < 0.95) {
+
+    turnSize =
+      randomBetween(
+        35,
+        85
+      );
+
+  }
+
+  else {
+
+    turnSize =
+      randomBetween(
+        85,
+        145
+      );
+
+  }
+
+
+  if (
+    Math.random() < 0.5
+  ) {
+
+    turnSize *= -1;
+
+  }
+
+
+  targetYaw =
+    normalizeAngle(
+
+      currentYaw +
+
+      degreesToRadians(
+        turnSize
+      )
+
+    );
+
+
+  targetPitch =
+    degreesToRadians(
+
+      randomBetween(
+        -18,
+        16
+      )
+
+    );
+
+
+  headTargetTimer =
+    setTimeout(() => {
+
+      chooseHeadTarget(
+        myGeneration
+      );
+
+    }, randomInt(2500, 9000));
+
+}
+
+
+// ======================================================
+// SMOOTH HEAD MOVEMENT
+// ======================================================
+
+function smoothHeadLoop(myGeneration) {
+
+  if (!behaviorActive(myGeneration)) {
+    return;
+  }
+
+
+  const yawDifference =
+    normalizeAngle(
+
+      targetYaw -
+      currentYaw
+
+    );
+
+
+  const pitchDifference =
+    targetPitch -
+    currentPitch;
+
+
+  // Constant smoothing gives genuinely smooth movement.
+
+  currentYaw +=
+    yawDifference * 0.04;
+
+
+  currentPitch +=
+    pitchDifference * 0.04;
+
+
+  try {
+
+    const lookResult =
+      bot.look(
+
+        currentYaw,
+
+        currentPitch,
+
+        true
+
+      );
+
+
+    if (
+      lookResult &&
+      typeof lookResult.catch === 'function'
+    ) {
+
+      lookResult.catch(
+        () => {}
+      );
+
+    }
+
+  } catch {}
+
+
+  headLoopTimer =
+    setTimeout(() => {
+
+      smoothHeadLoop(
+        myGeneration
+      );
+
+    }, 50);
+
+}
+
+
+// ======================================================
+// RESET DIRECTIONAL CONTROLS
+// ======================================================
+
+function resetMovementControls() {
+
+  if (!bot) return;
+
 
   bot.setControlState(
     'forward',
@@ -564,529 +1055,17 @@ function chooseLongMovement(mySession) {
     false
   );
 
-
-  const movements = [
-
-    {
-      name: 'Walking forward',
-      controls: ['forward'],
-      weight: 22
-    },
-
-    {
-      name: 'Walking forward-left',
-      controls: ['forward', 'left'],
-      weight: 18
-    },
-
-    {
-      name: 'Walking forward-right',
-      controls: ['forward', 'right'],
-      weight: 18
-    },
-
-    {
-      name: 'Curving left',
-      controls: ['forward', 'left'],
-      weight: 10
-    },
-
-    {
-      name: 'Curving right',
-      controls: ['forward', 'right'],
-      weight: 10
-    },
-
-    {
-      name: 'Moving left',
-      controls: ['left'],
-      weight: 6
-    },
-
-    {
-      name: 'Moving right',
-      controls: ['right'],
-      weight: 6
-    },
-
-    {
-      name: 'Backing left',
-      controls: ['back', 'left'],
-      weight: 3
-    },
-
-    {
-      name: 'Backing right',
-      controls: ['back', 'right'],
-      weight: 3
-    },
-
-    {
-      name: 'Walking backward',
-      controls: ['back'],
-      weight: 2
-    },
-
-    {
-      name: 'Briefly standing',
-      controls: [],
-      weight: 2
-    }
-
-  ];
-
-
-  let choice;
-
-  let attempts = 0;
-
-
-  do {
-
-    choice =
-      weightedChoice(
-        movements
-      );
-
-    attempts++;
-
-  } while (
-
-    movementHistory.includes(
-      choice.name
-    ) &&
-
-    attempts < 10
-
-  );
-
-
-  movementHistory.push(
-    choice.name
-  );
-
-
-  if (
-    movementHistory.length > 3
-  ) {
-
-    movementHistory.shift();
-
-  }
-
-
-  for (
-    const control of choice.controls
-  ) {
-
-    bot.setControlState(
-      control,
-      true
-    );
-
-  }
-
-
-  /*
-    Sprint occasionally during
-    forward movement.
-  */
-
-  if (
-
-    choice.controls.includes(
-      'forward'
-    ) &&
-
-    Math.random() < 0.18
-
-  ) {
-
-    bot.setControlState(
-      'sprint',
-      true
-    );
-
-    currentBehavior =
-      `${choice.name} + sprinting`;
-
-  }
-
-  else {
-
-    currentBehavior =
-      choice.name;
-
-  }
-
-
-  /*
-    Long movement duration:
-
-    Usually 5–14 seconds.
-
-    Rare standing pause:
-    0.8–2.2 seconds.
-  */
-
-  let duration;
-
-
-  if (
-    choice.controls.length === 0
-  ) {
-
-    duration =
-      randomInt(
-        800,
-        2200
-      );
-
-  }
-
-  else {
-
-    duration =
-      randomInt(
-        5000,
-        14000
-      );
-
-  }
-
-
-  movementTimer =
-    setTimeout(() => {
-
-      chooseLongMovement(
-        mySession
-      );
-
-    }, duration);
-
 }
 
 
-// ==================================================
-// INDEPENDENT JUMPING
-// ==================================================
+// ======================================================
+// STOP BEHAVIOR
+// ======================================================
 
-function scheduleJump(mySession) {
+function stopBehavior() {
 
-  if (
-    !active(mySession) ||
-    !movementEngineRunning
-  ) {
-    return;
-  }
-
-
-  /*
-    Uneven jump intervals.
-  */
-
-  const delay =
-    randomInt(
-      3500,
-      13000
-    );
-
-
-  jumpTimer =
-    setTimeout(() => {
-
-      if (
-        !active(mySession) ||
-        !movementEngineRunning
-      ) {
-        return;
-      }
-
-
-      bot.setControlState(
-        'jump',
-        true
-      );
-
-
-      setTimeout(() => {
-
-        if (!active(mySession)) return;
-
-        bot.setControlState(
-          'jump',
-          false
-        );
-
-      }, randomInt(250, 500));
-
-
-      scheduleJump(
-        mySession
-      );
-
-    }, delay);
-
-}
-
-
-// ==================================================
-// INDEPENDENT ARM MOVEMENT
-// ==================================================
-
-function scheduleSwing(mySession) {
-
-  if (
-    !active(mySession) ||
-    !movementEngineRunning
-  ) {
-    return;
-  }
-
-
-  const delay =
-    randomInt(
-      4000,
-      18000
-    );
-
-
-  swingTimer =
-    setTimeout(() => {
-
-      if (
-        !active(mySession) ||
-        !movementEngineRunning
-      ) {
-        return;
-      }
-
-
-      try {
-
-        bot.swingArm(
-          Math.random() < 0.9
-            ? 'right'
-            : 'left'
-        );
-
-      } catch {}
-
-
-      /*
-        Small chance of another swing,
-        without creating constant patterns.
-      */
-
-      if (
-        Math.random() < 0.12
-      ) {
-
-        setTimeout(() => {
-
-          if (!active(mySession)) return;
-
-          try {
-
-            bot.swingArm('right');
-
-          } catch {}
-
-        }, randomInt(400, 1200));
-
-      }
-
-
-      scheduleSwing(
-        mySession
-      );
-
-    }, delay);
-
-}
-
-
-// ==================================================
-// HEAD TARGET SYSTEM
-// ==================================================
-
-function chooseHeadTarget(mySession) {
-
-  if (
-    !active(mySession) ||
-    !movementEngineRunning
-  ) {
-    return;
-  }
-
-
-  const roll =
-    Math.random();
-
-
-  let maxTurn;
-
-
-  /*
-    Most turns are small.
-
-    Some are medium.
-
-    Large turns are uncommon.
-  */
-
-  if (roll < 0.70) {
-
-    maxTurn = 30;
-
-  }
-
-  else if (roll < 0.94) {
-
-    maxTurn = 75;
-
-  }
-
-  else {
-
-    maxTurn = 145;
-
-  }
-
-
-  targetYaw =
-    normalizeAngle(
-
-      currentYaw +
-
-      degreesToRadians(
-
-        randomBetween(
-          -maxTurn,
-          maxTurn
-        )
-
-      )
-
-    );
-
-
-  targetPitch =
-    degreesToRadians(
-
-      randomBetween(
-        -20,
-        18
-      )
-
-    );
-
-
-  headTargetTimer =
-    setTimeout(() => {
-
-      chooseHeadTarget(
-        mySession
-      );
-
-    }, randomInt(2200, 8500));
-
-}
-
-
-// ==================================================
-// SMOOTH HEAD LOOP
-// ==================================================
-
-function smoothHeadLoop(mySession) {
-
-  if (
-    !active(mySession) ||
-    !movementEngineRunning
-  ) {
-    return;
-  }
-
-
-  const yawDifference =
-    normalizeAngle(
-
-      targetYaw -
-      currentYaw
-
-    );
-
-
-  const pitchDifference =
-    targetPitch -
-    currentPitch;
-
-
-  /*
-    Smooth interpolation.
-  */
-
-  const smoothing =
-    0.045;
-
-
-  currentYaw +=
-    yawDifference *
-    smoothing;
-
-
-  currentPitch +=
-    pitchDifference *
-    smoothing;
-
-
-  try {
-
-    const result =
-      bot.look(
-
-        currentYaw,
-
-        currentPitch,
-
-        true
-
-      );
-
-
-    if (
-      result &&
-      typeof result.catch === 'function'
-    ) {
-
-      result.catch(
-        () => {}
-      );
-
-    }
-
-  } catch {}
-
-
-  headLoopTimer =
-    setTimeout(() => {
-
-      smoothHeadLoop(
-        mySession
-      );
-
-    }, 50);
-
-}
-
-
-// ==================================================
-// STOP MOVEMENT ENGINE
-// ==================================================
-
-function stopMovementEngine() {
-
-  movementEngineRunning = false;
+  engineRunning =
+    false;
 
 
   clearTimeout(
@@ -1098,7 +1077,7 @@ function stopMovementEngine() {
   );
 
   clearTimeout(
-    swingTimer
+    punchTimer
   );
 
   clearTimeout(
@@ -1112,7 +1091,7 @@ function stopMovementEngine() {
 
   movementTimer = null;
   jumpTimer = null;
-  swingTimer = null;
+  punchTimer = null;
   headTargetTimer = null;
   headLoopTimer = null;
 
@@ -1130,28 +1109,43 @@ function stopMovementEngine() {
 }
 
 
-// ==================================================
-// ACTIVE CONNECTION CHECK
-// ==================================================
+// ======================================================
+// CHECKS
+// ======================================================
 
-function active(mySession) {
+function isActive(myGeneration) {
 
   return (
 
-    mySession === sessionId &&
+    myGeneration === generation &&
 
-    bot &&
+    bot !== null &&
 
-    bot.entity
+    bot.entity !== null &&
+
+    bot.entity !== undefined
 
   );
 
 }
 
 
-// ==================================================
-// WEIGHTED RANDOM SELECTION
-// ==================================================
+function behaviorActive(myGeneration) {
+
+  return (
+
+    isActive(myGeneration) &&
+
+    engineRunning
+
+  );
+
+}
+
+
+// ======================================================
+// WEIGHTED RANDOM CHOICE
+// ======================================================
 
 function weightedChoice(options) {
 
@@ -1166,7 +1160,7 @@ function weightedChoice(options) {
     );
 
 
-  let random =
+  let roll =
     Math.random() *
     total;
 
@@ -1175,11 +1169,13 @@ function weightedChoice(options) {
     const option of options
   ) {
 
-    random -=
+    roll -=
       option.weight;
 
 
-    if (random <= 0) {
+    if (
+      roll <= 0
+    ) {
 
       return option;
 
@@ -1195,9 +1191,9 @@ function weightedChoice(options) {
 }
 
 
-// ==================================================
+// ======================================================
 // HELPERS
-// ==================================================
+// ======================================================
 
 function randomInt(min, max) {
 
@@ -1294,7 +1290,7 @@ function readable(value) {
 }
 
 
-function formatDuration(milliseconds) {
+function formatTime(milliseconds) {
 
   const seconds =
     Math.floor(
@@ -1327,7 +1323,7 @@ function formatDuration(milliseconds) {
 }
 
 
-function escapeHtml(value) {
+function safe(value) {
 
   return String(value)
 
@@ -1359,8 +1355,8 @@ function escapeHtml(value) {
 }
 
 
-// ==================================================
+// ======================================================
 // START
-// ==================================================
+// ======================================================
 
 startBot();
