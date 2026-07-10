@@ -1,19 +1,15 @@
 const mineflayer = require('mineflayer');
 const config = require('./config.json');
-const express = require('express'); // Added for Render web satisfaction
+const express = require('express');
 
-// 1. Render Keep-Alive Web Server (Fixes the "No open port detected" crash)
+// 1. Render Keep-Alive Web Server
 const app = express();
 const port = process.env.PORT || 10000;
 app.get('/', (req, res) => res.send('Bot is active!'));
 app.listen(port, () => console.log(`Web Listener active on port ${port}`));
 
 let bot;
-let movementPhase = 0;
-const STEP_INTERVAL = 1500;
-const JUMP_DURATION = 500;
 
-// Wrap bot creation in a function to allow automatic restarts
 function initBot() {
   console.log(`Attempting to connect ${config.botUsername}...`);
   
@@ -29,61 +25,60 @@ function initBot() {
   bot.on('spawn', () => {
     setTimeout(() => {
       bot.setControlState('sneak', true);
-      console.log(`✅ ${config.botUsername} is Ready!`);
+      console.log(`✅ ${config.botUsername} has logged into the world!`);
+      // Start the unpredictable human simulation loop
+      humanBehaviorLoop();
     }, 3000);
-
-    setTimeout(movementCycle, STEP_INTERVAL);
   });
 
-  bot.on('error', (err) => {
-    console.error('⚠️ Error:', err);
-  });
+  bot.on('error', (err) => console.error('⚠️ Error:', err));
 
-  // 2. Automatic Reconnect Logic
   bot.on('end', () => {
-    console.log('⛔️ Bot Disconnected! Retrying connection in 30 seconds...');
-    // Clear any active movement states
-    movementPhase = 0;
-    // Tell Render to safely reboot the container to establish a fresh connection
-    setTimeout(() => {
-      process.exit(1); 
-    }, 30000);
+    console.log('⛔️ Bot Disconnected! Triggering server restart script in 30 seconds...');
+    setTimeout(() => process.exit(1), 30000);
   });
 }
 
-function movementCycle() {
-  // Added basic safety check to prevent crashing if the bot disconnects mid-cycle
-  if (!bot || !bot.entity) return; 
+// 2. Human Behavior Emulation Engine
+function humanBehaviorLoop() {
+  if (!bot || !bot.entity) return;
 
-  switch (movementPhase) {
-    case 0:
-      bot.setControlState('forward', true);
-      bot.setControlState('back', false);
-      bot.setControlState('jump', false);
-      break;
-    case 1:
-      bot.setControlState('forward', false);
-      bot.setControlState('back', true);
-      bot.setControlState('jump', false);
-      break;
-    case 2:
-      bot.setControlState('forward', false);
-      bot.setControlState('back', false);
-      bot.setControlState('jump', true);
-      setTimeout(() => {
-        if (bot && bot.entity) bot.setControlState('jump', false);
-      }, JUMP_DURATION);
-      break;
-    case 3:
-      bot.setControlState('forward', false);
-      bot.setControlState('back', false);
-      bot.setControlState('jump', false);
-      break;
+  const choice = Math.random();
+
+  // Reset all prior movement states before generating a new one
+  bot.clearControlStates();
+  bot.setControlState('sneak', true); // Keep sneaking to muffle footstep checks
+
+  if (choice < 0.25) {
+    // Action A: Take a few steps forward
+    bot.setControlState('forward', true);
+    setTimeout(() => bot.setControlState('forward', false), Math.floor(Math.random() * 800) + 200);
+
+  } else if (choice < 0.50) {
+    // Action B: Randomly jump or strafe sideways
+    const side = Math.random() > 0.5 ? 'left' : 'right';
+    bot.setControlState(side, true);
+    if (Math.random() > 0.6) bot.setControlState('jump', true);
+    
+    setTimeout(() => {
+      bot.clearControlStates();
+      bot.setControlState('sneak', true);
+    }, Math.floor(Math.random() * 600) + 200);
+
+  } else if (choice < 0.75) {
+    // Action C: Turn head around naturally (Crucial for bypass)
+    const yaw = (Math.random() * 360) * (Math.PI / 180);
+    const pitch = ((Math.random() * 40) - 20) * (Math.PI / 180);
+    bot.look(yaw, pitch, true);
+
+  } else {
+    // Action D: Swing hand arms naturally
+    bot.swingArm('right');
   }
 
-  movementPhase = (movementPhase + 1) % 4;
-  setTimeout(movementCycle, STEP_INTERVAL);
+  // Generate completely random wait intervals between 2 to 7 seconds
+  const nextInterval = Math.floor(Math.random() * 5000) + 2000;
+  setTimeout(humanBehaviorLoop, nextInterval);
 }
 
-// Fire up the bot initial connection
 initBot();
