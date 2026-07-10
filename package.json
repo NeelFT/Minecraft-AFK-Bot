@@ -1,7 +1,7 @@
 {
   "name": "nuekkis-afk-bot",
   "version": "1.0.0",
-  "description": "An AFK bot that moves on-site to keep Aternos servers open 24/7. Not only for Aternos but also applies for different services.",
+  "description": "Minecraft AFK bot",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js"
@@ -9,9 +9,8 @@
   "author": "nuekkis",
   "license": "MIT",
   "dependencies": {
-  "mineflayer": "^4.22.0",
-  "minecraft-data": "latest",
-  "express": "^4.19.0"
+    "mineflayer": "^4.22.0",
+    "minecraft-data": "latest",
+    "express": "^4.19.0"
   }
 }
-  
