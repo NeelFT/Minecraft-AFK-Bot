@@ -24,7 +24,7 @@ function initBot() {
 
   bot.on('spawn', () => {
     setTimeout(() => {
-      bot.setControlState('sneak', true);
+      bot.setControlState('sneak', false);
       console.log(`✅ ${config.botUsername} has logged into the world!`);
       // Start the unpredictable human simulation loop
       humanBehaviorLoop();
