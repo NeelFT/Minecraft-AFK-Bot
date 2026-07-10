@@ -4,35 +4,401 @@ const config = require('./config.json');
 
 
 // ==================================================
-// RENDER WEB SERVER
-// ==================================================
-
-const app = express();
-const WEB_PORT = process.env.PORT || 10000;
-
-app.get('/', (req, res) => {
-  res.send('Minecraft bot is running.');
-});
-
-app.listen(WEB_PORT, '0.0.0.0', () => {
-  console.log(`🌐 Web server listening on port ${WEB_PORT}`);
-});
-
-
-// ==================================================
 // SETTINGS
 // ==================================================
 
+const WEB_PORT = process.env.PORT || 10000;
 const RECONNECT_DELAY = 30000;
+
+
+// ==================================================
+// WEB SERVER + STATUS STATE
+// ==================================================
+
+const app = express();
+
+let bot = null;
+
+let botStatus = 'Starting';
+let currentBehavior = 'Waiting';
+
+let connectionStartedAt = null;
+let connectionCompletedAt = null;
+let connectedSince = null;
+
+let lastConnectionTime = null;
+
+let lastError = 'None';
+let lastKick = 'None';
+let lastDisconnect = 'None';
+
+
+// ==================================================
+// STATUS PAGE
+// ==================================================
+
+app.get('/', (req, res) => {
+
+  res.status(200).send(`
+<!DOCTYPE html>
+
+<html>
+
+<head>
+
+<meta charset="UTF-8">
+
+<meta
+  name="viewport"
+  content="width=device-width, initial-scale=1.0"
+>
+
+<title>Nunya Bot Status</title>
+
+<style>
+
+body {
+  background: #111;
+  color: #eee;
+  font-family: Arial, sans-serif;
+  padding: 24px;
+}
+
+.card {
+  max-width: 650px;
+  margin: auto;
+  background: #1e1e1e;
+  padding: 25px;
+  border-radius: 16px;
+  line-height: 1.7;
+}
+
+h1 {
+  margin-top: 0;
+}
+
+.status {
+  font-size: 24px;
+  font-weight: bold;
+  margin-bottom: 20px;
+}
+
+.item {
+  margin-top: 13px;
+  word-break: break-word;
+}
+
+.timer {
+  font-size: 20px;
+  font-weight: bold;
+}
+
+</style>
+
+</head>
+
+
+<body>
+
+<div class="card">
+
+<h1>🤖 Nunya Bot Status</h1>
+
+
+<div class="status">
+
+Status:
+<span id="status">
+${escapeHtml(botStatus)}
+</span>
+
+</div>
+
+
+<div class="item">
+
+⏳ Connection timer:
+
+<span
+  class="timer"
+  id="connectionTimer"
+>
+Calculating...
+</span>
+
+</div>
+
+
+<div class="item">
+
+⚡ Last successful connection time:
+
+<span id="lastConnectionTime">
+
+${
+  lastConnectionTime === null
+    ? 'No successful connection yet'
+    : formatMilliseconds(lastConnectionTime)
+}
+
+</span>
+
+</div>
+
+
+<div class="item">
+
+⏱ Connected uptime:
+
+<span id="uptime">
+Calculating...
+</span>
+
+</div>
+
+
+<div class="item">
+
+🏃 Current behavior:
+
+${escapeHtml(currentBehavior)}
+
+</div>
+
+
+<div class="item">
+
+🌍 Server:
+
+${escapeHtml(config.serverHost)}:${escapeHtml(config.serverPort)}
+
+</div>
+
+
+<div class="item">
+
+👤 Username:
+
+${escapeHtml(config.botUsername)}
+
+</div>
+
+
+<div class="item">
+
+⚠️ Last error:
+
+${escapeHtml(lastError)}
+
+</div>
+
+
+<div class="item">
+
+🚫 Last kick:
+
+${escapeHtml(lastKick)}
+
+</div>
+
+
+<div class="item">
+
+🔌 Last disconnect:
+
+${escapeHtml(lastDisconnect)}
+
+</div>
+
+</div>
+
+
+<script>
+
+const connectionStartedAt =
+  ${connectionStartedAt || 'null'};
+
+const connectionCompletedAt =
+  ${connectionCompletedAt || 'null'};
+
+const connectedSince =
+  ${connectedSince || 'null'};
+
+
+function format(ms) {
+
+  if (ms < 0) ms = 0;
+
+  const totalSeconds =
+    Math.floor(ms / 1000);
+
+  const minutes =
+    Math.floor(totalSeconds / 60);
+
+  const seconds =
+    totalSeconds % 60;
+
+  const milliseconds =
+    Math.floor((ms % 1000) / 100);
+
+
+  return (
+    minutes +
+    'm ' +
+    seconds +
+    '.' +
+    milliseconds +
+    's'
+  );
+
+}
+
+
+function updateTimers() {
+
+  const now = Date.now();
+
+
+  const connectionTimer =
+    document.getElementById(
+      'connectionTimer'
+    );
+
+
+  if (
+    connectionStartedAt &&
+    !connectionCompletedAt
+  ) {
+
+    connectionTimer.textContent =
+      format(
+        now -
+        connectionStartedAt
+      );
+
+  }
+
+  else if (
+    connectionStartedAt &&
+    connectionCompletedAt
+  ) {
+
+    connectionTimer.textContent =
+      format(
+        connectionCompletedAt -
+        connectionStartedAt
+      ) +
+      ' ✓';
+
+  }
+
+  else {
+
+    connectionTimer.textContent =
+      'Not started';
+
+  }
+
+
+  const uptime =
+    document.getElementById(
+      'uptime'
+    );
+
+
+  if (connectedSince) {
+
+    uptime.textContent =
+      format(
+        now -
+        connectedSince
+      );
+
+  }
+
+  else {
+
+    uptime.textContent =
+      'Not connected';
+
+  }
+
+}
+
+
+updateTimers();
+
+setInterval(
+  updateTimers,
+  100
+);
+
+</script>
+
+</body>
+
+</html>
+  `);
+
+});
+
+
+// ==================================================
+// HEALTH ENDPOINT
+// ==================================================
+
+app.get('/health', (req, res) => {
+
+  res.status(200).json({
+
+    web: 'online',
+
+    status: botStatus,
+
+    behavior: currentBehavior,
+
+    connectionStartedAt,
+
+    connectionCompletedAt,
+
+    lastConnectionTime,
+
+    connectedSince,
+
+    lastError,
+
+    lastKick,
+
+    lastDisconnect
+
+  });
+
+});
+
+
+app.listen(
+  WEB_PORT,
+  '0.0.0.0',
+  () => {
+
+    console.log(
+      `🌐 Web server listening on port ${WEB_PORT}`
+    );
+
+  }
+);
 
 
 // ==================================================
 // BOT STATE
 // ==================================================
 
-let bot = null;
+let sessionId = 0;
+
+let reconnectTimer = null;
 
 let movementTimer = null;
+
 let jumpTimer = null;
 let jumpReleaseTimer = null;
 
@@ -42,15 +408,13 @@ let secondPunchTimer = null;
 let headTargetTimer = null;
 let headLoopTimer = null;
 
-let reconnectTimer = null;
-
-let sessionId = 0;
-
 let currentYaw = 0;
 let currentPitch = 0;
 
 let targetYaw = 0;
 let targetPitch = 0;
+
+let lastMovement = null;
 
 
 // ==================================================
@@ -61,48 +425,96 @@ function startBot() {
 
   sessionId++;
 
-  const mySession = sessionId;
+  const mySession =
+    sessionId;
+
+
+  connectionStartedAt =
+    Date.now();
+
+
+  connectionCompletedAt =
+    null;
+
+
+  connectedSince =
+    null;
+
+
+  botStatus =
+    'Connecting';
+
+
+  currentBehavior =
+    'Waiting for connection';
+
 
   console.log('');
-  console.log('====================================');
-  console.log('🤖 Starting Minecraft bot...');
+
+  console.log(
+    '===================================='
+  );
+
+  console.log(
+    '🤖 Starting Minecraft bot...'
+  );
+
   console.log(
     `🌍 ${config.serverHost}:${config.serverPort}`
   );
+
   console.log(
     `👤 ${config.botUsername}`
   );
-  console.log('====================================');
+
+  console.log(
+    '===================================='
+  );
 
 
   // ==================================================
-  // CONNECTION BLOCK
+  // WORKING CONNECTION CONFIG
   // ==================================================
 
   bot = mineflayer.createBot({
 
-    host: config.serverHost,
+    host:
+      config.serverHost,
 
-    port: config.serverPort,
+    port:
+      config.serverPort,
 
-    username: config.botUsername,
+    username:
+      config.botUsername,
 
-    auth: 'offline',
+    auth:
+      'offline',
 
-    version: false,
+    version:
+      false,
 
-    viewDistance: config.botChunk
+    viewDistance:
+      config.botChunk
 
   });
 
 
-  // ================================================
-  // CONNECTION EVENTS
-  // ================================================
+  // ==================================================
+  // TCP CONNECTED
+  // ==================================================
 
   bot.on('connect', () => {
 
-    if (mySession !== sessionId) return;
+    if (
+      mySession !== sessionId
+    ) {
+      return;
+    }
+
+
+    botStatus =
+      'TCP connected';
+
 
     console.log(
       '🔌 TCP connected.'
@@ -111,9 +523,22 @@ function startBot() {
   });
 
 
+  // ==================================================
+  // LOGIN
+  // ==================================================
+
   bot.on('login', () => {
 
-    if (mySession !== sessionId) return;
+    if (
+      mySession !== sessionId
+    ) {
+      return;
+    }
+
+
+    botStatus =
+      'Logged in — waiting for spawn';
+
 
     console.log(
       '📡 Login successful.'
@@ -122,13 +547,42 @@ function startBot() {
   });
 
 
-  // ================================================
+  // ==================================================
   // SPAWN
-  // ================================================
+  // ==================================================
 
   bot.on('spawn', () => {
 
-    if (mySession !== sessionId) return;
+    if (
+      mySession !== sessionId
+    ) {
+      return;
+    }
+
+
+    connectionCompletedAt =
+      Date.now();
+
+
+    lastConnectionTime =
+      connectionCompletedAt -
+      connectionStartedAt;
+
+
+    connectedSince =
+      Date.now();
+
+
+    botStatus =
+      'Spawned and active';
+
+
+    currentBehavior =
+      'Starting movement';
+
+
+    lastError =
+      'None';
 
 
     console.log(
@@ -136,20 +590,26 @@ function startBot() {
     );
 
 
-    /*
-      Stop any leftover movement timers before
-      starting a fresh movement session.
-    */
-
-    stopLoops();
-
-
-    bot.clearControlStates();
-
-    bot.setControlState(
-      'sneak',
-      false
+    console.log(
+      `⚡ Connection took ${formatMilliseconds(lastConnectionTime)}`
     );
+
+
+    stopMovementLoops();
+
+
+    try {
+
+      bot.clearControlStates();
+
+      bot.setControlState(
+        'sneak',
+        false
+      );
+
+    }
+
+    catch {}
 
 
     currentYaw =
@@ -168,19 +628,23 @@ function startBot() {
       currentPitch;
 
 
+    /*
+      Start almost immediately after spawn.
+    */
+
     setTimeout(() => {
 
       if (
-        mySession !== sessionId ||
-        !bot ||
-        !bot.entity
+        !isSessionActive(
+          mySession
+        )
       ) {
         return;
       }
 
 
       console.log(
-        '🟢 Continuous movement systems started.'
+        '🟢 Movement systems started.'
       );
 
 
@@ -209,18 +673,30 @@ function startBot() {
       );
 
 
-    }, 3000);
+    }, 500);
 
   });
 
 
-  // ================================================
-  // LOGGING
-  // ================================================
+  // ==================================================
+  // KICKED
+  // ==================================================
 
   bot.on('kicked', reason => {
 
-    if (mySession !== sessionId) return;
+    if (
+      mySession !== sessionId
+    ) {
+      return;
+    }
+
+
+    lastKick =
+      readable(reason);
+
+
+    botStatus =
+      'Kicked';
 
 
     console.log('');
@@ -229,39 +705,29 @@ function startBot() {
       '🚫 BOT KICKED:'
     );
 
-
-    try {
-
-      console.log(
-
-        typeof reason === 'string'
-
-          ? reason
-
-          : JSON.stringify(
-              reason,
-              null,
-              2
-            )
-
-      );
-
-    }
-
-    catch {
-
-      console.log(
-        reason
-      );
-
-    }
+    console.log(
+      lastKick
+    );
 
   });
 
 
+  // ==================================================
+  // ERROR
+  // ==================================================
+
   bot.on('error', err => {
 
-    if (mySession !== sessionId) return;
+    if (
+      mySession !== sessionId
+    ) {
+      return;
+    }
+
+
+    lastError =
+      err.message ||
+      String(err);
 
 
     console.log('');
@@ -277,13 +743,36 @@ function startBot() {
   });
 
 
-  // ================================================
-  // RECONNECT
-  // ================================================
+  // ==================================================
+  // DISCONNECTED
+  // ==================================================
 
   bot.on('end', reason => {
 
-    if (mySession !== sessionId) return;
+    if (
+      mySession !== sessionId
+    ) {
+      return;
+    }
+
+
+    lastDisconnect =
+      readable(
+        reason ||
+        'Unknown reason'
+      );
+
+
+    connectedSince =
+      null;
+
+
+    botStatus =
+      'Disconnected — reconnect scheduled';
+
+
+    currentBehavior =
+      'Disconnected';
 
 
     console.log('');
@@ -291,13 +780,13 @@ function startBot() {
     console.log(
 
       `⛔ Disconnected: ${
-        reason || 'Unknown reason'
+        lastDisconnect
       }`
 
     );
 
 
-    stopLoops();
+    stopMovementLoops();
 
 
     clearTimeout(
@@ -327,169 +816,149 @@ function startBot() {
 
 
 // ==================================================
-// MOVEMENT SYSTEM
+// MOVEMENT PROFILES
 // ==================================================
 
-function chooseMovement(mySession) {
+const movements = [
+
+  {
+    name: 'Walking forward',
+    controls: ['forward'],
+    weight: 24
+  },
+
+  {
+    name: 'Moving forward-left',
+    controls: ['forward', 'left'],
+    weight: 20
+  },
+
+  {
+    name: 'Moving forward-right',
+    controls: ['forward', 'right'],
+    weight: 20
+  },
+
+  {
+    name: 'Strafing left',
+    controls: ['left'],
+    weight: 8
+  },
+
+  {
+    name: 'Strafing right',
+    controls: ['right'],
+    weight: 8
+  },
+
+  {
+    name: 'Backing left',
+    controls: ['back', 'left'],
+    weight: 5
+  },
+
+  {
+    name: 'Backing right',
+    controls: ['back', 'right'],
+    weight: 5
+  },
+
+  {
+    name: 'Walking backward',
+    controls: ['back'],
+    weight: 4
+  }
+
+];
+
+
+// ==================================================
+// CONTINUOUS MOVEMENT
+// ==================================================
+
+function chooseMovement(
+  mySession
+) {
 
   if (
-    !isSessionActive(mySession)
+    !isSessionActive(
+      mySession
+    )
   ) {
     return;
   }
 
 
   /*
-    Only reset directional movement.
+    Reset only directional controls.
 
-    Jumping stays independent.
+    Jumping and punching remain independent.
   */
 
-  bot.setControlState(
+  setControl(
     'forward',
     false
   );
 
-  bot.setControlState(
+  setControl(
     'back',
     false
   );
 
-  bot.setControlState(
+  setControl(
     'left',
     false
   );
 
-  bot.setControlState(
+  setControl(
     'right',
     false
   );
 
-  bot.setControlState(
+  setControl(
     'sprint',
     false
   );
 
-  bot.setControlState(
+  setControl(
     'sneak',
     false
   );
 
 
-  const roll =
-    Math.random();
+  let selected;
 
 
-  // Forward
+  /*
+    Don't repeat the immediately previous movement.
+  */
 
-  if (roll < 0.22) {
+  do {
 
-    bot.setControlState(
-      'forward',
-      true
-    );
+    selected =
+      weightedChoice(
+        movements
+      );
 
-  }
+  } while (
 
+    selected.name ===
+    lastMovement
 
-  // Forward-left diagonal
-
-  else if (roll < 0.40) {
-
-    bot.setControlState(
-      'forward',
-      true
-    );
-
-    bot.setControlState(
-      'left',
-      true
-    );
-
-  }
+  );
 
 
-  // Forward-right diagonal
-
-  else if (roll < 0.58) {
-
-    bot.setControlState(
-      'forward',
-      true
-    );
-
-    bot.setControlState(
-      'right',
-      true
-    );
-
-  }
+  lastMovement =
+    selected.name;
 
 
-  // Left strafe
+  for (
+    const control
+    of selected.controls
+  ) {
 
-  else if (roll < 0.68) {
-
-    bot.setControlState(
-      'left',
-      true
-    );
-
-  }
-
-
-  // Right strafe
-
-  else if (roll < 0.78) {
-
-    bot.setControlState(
-      'right',
-      true
-    );
-
-  }
-
-
-  // Back-left
-
-  else if (roll < 0.84) {
-
-    bot.setControlState(
-      'back',
-      true
-    );
-
-    bot.setControlState(
-      'left',
-      true
-    );
-
-  }
-
-
-  // Back-right
-
-  else if (roll < 0.90) {
-
-    bot.setControlState(
-      'back',
-      true
-    );
-
-    bot.setControlState(
-      'right',
-      true
-    );
-
-  }
-
-
-  // Backward
-
-  else if (roll < 0.94) {
-
-    bot.setControlState(
-      'back',
+    setControl(
+      control,
       true
     );
 
@@ -497,18 +966,12 @@ function chooseMovement(mySession) {
 
 
   /*
-    6% chance of a pause.
-
-    The pause lasts for the same randomized
-    movement duration below.
+    Occasional sprint while moving forward.
   */
-
-
-  // Occasional sprint
 
   if (
 
-    bot.getControlState(
+    selected.controls.includes(
       'forward'
     ) &&
 
@@ -516,22 +979,37 @@ function chooseMovement(mySession) {
 
   ) {
 
-    bot.setControlState(
+    setControl(
       'sprint',
       true
     );
+
+
+    currentBehavior =
+      `${selected.name} + sprint`;
+
+  }
+
+  else {
+
+    currentBehavior =
+      selected.name;
 
   }
 
 
   /*
-    Movement duration from the version you liked.
+    Longer continuous movements.
+
+    6 to 15 seconds.
+
+    No deliberate standing-still phase.
   */
 
   const duration =
     randomInt(
-      1800,
-      6500
+      6000,
+      15000
     );
 
 
@@ -548,50 +1026,37 @@ function chooseMovement(mySession) {
 
 
 // ==================================================
-// INDEPENDENT JUMP SYSTEM
+// JUMP SYSTEM
 // ==================================================
 
-function scheduleJump(mySession) {
+function scheduleJump(
+  mySession
+) {
 
   if (
-    !isSessionActive(mySession)
+    !isSessionActive(
+      mySession
+    )
   ) {
     return;
   }
-
-
-  const delay =
-    randomInt(
-      2500,
-      10000
-    );
 
 
   jumpTimer =
     setTimeout(() => {
 
       if (
-        !isSessionActive(mySession)
+        !isSessionActive(
+          mySession
+        )
       ) {
         return;
       }
 
 
-      bot.setControlState(
+      setControl(
         'jump',
         true
-      );
-
-
-      const jumpLength =
-        randomInt(
-          250,
-          550
-        );
-
-
-      clearTimeout(
-        jumpReleaseTimer
       );
 
 
@@ -599,19 +1064,24 @@ function scheduleJump(mySession) {
         setTimeout(() => {
 
           if (
-            !isSessionActive(mySession)
+            !isSessionActive(
+              mySession
+            )
           ) {
             return;
           }
 
 
-          bot.setControlState(
+          setControl(
             'jump',
             false
           );
 
 
-        }, jumpLength);
+        }, randomInt(
+          250,
+          500
+        ));
 
 
       scheduleJump(
@@ -619,36 +1089,38 @@ function scheduleJump(mySession) {
       );
 
 
-    }, delay);
+    }, randomInt(
+      3000,
+      12000
+    ));
 
 }
 
 
 // ==================================================
-// INDEPENDENT ARM SWING SYSTEM
+// PUNCH SYSTEM
 // ==================================================
 
-function schedulePunch(mySession) {
+function schedulePunch(
+  mySession
+) {
 
   if (
-    !isSessionActive(mySession)
+    !isSessionActive(
+      mySession
+    )
   ) {
     return;
   }
-
-
-  const delay =
-    randomInt(
-      3000,
-      14000
-    );
 
 
   punchTimer =
     setTimeout(() => {
 
       if (
-        !isSessionActive(mySession)
+        !isSessionActive(
+          mySession
+        )
       ) {
         return;
       }
@@ -658,10 +1130,8 @@ function schedulePunch(mySession) {
 
         bot.swingArm(
 
-          Math.random() < 0.85
-
+          Math.random() < 0.9
             ? 'right'
-
             : 'left'
 
         );
@@ -671,24 +1141,17 @@ function schedulePunch(mySession) {
       catch {}
 
 
-      /*
-        Occasional second swing.
-      */
-
       if (
-        Math.random() < 0.18
+        Math.random() < 0.15
       ) {
-
-        clearTimeout(
-          secondPunchTimer
-        );
-
 
         secondPunchTimer =
           setTimeout(() => {
 
             if (
-              !isSessionActive(mySession)
+              !isSessionActive(
+                mySession
+              )
             ) {
               return;
             }
@@ -706,8 +1169,8 @@ function schedulePunch(mySession) {
 
 
           }, randomInt(
-            300,
-            900
+            350,
+            1000
           ));
 
       }
@@ -718,33 +1181,40 @@ function schedulePunch(mySession) {
       );
 
 
-    }, delay);
+    }, randomInt(
+      3000,
+      14000
+    ));
 
 }
 
 
 // ==================================================
-// HEAD TARGET SYSTEM
+// HEAD TARGETS
 // ==================================================
 
-function chooseHeadTarget(mySession) {
+function chooseHeadTarget(
+  mySession
+) {
 
   if (
-    !isSessionActive(mySession)
+    !isSessionActive(
+      mySession
+    )
   ) {
     return;
   }
 
 
-  let maxTurn;
-
-
-  const turnRoll =
+  const roll =
     Math.random();
 
 
+  let maxTurn;
+
+
   if (
-    turnRoll < 0.65
+    roll < 0.68
   ) {
 
     maxTurn = 35;
@@ -752,7 +1222,7 @@ function chooseHeadTarget(mySession) {
   }
 
   else if (
-    turnRoll < 0.90
+    roll < 0.94
   ) {
 
     maxTurn = 80;
@@ -766,22 +1236,19 @@ function chooseHeadTarget(mySession) {
   }
 
 
-  const yawChange =
-    degreesToRadians(
-
-      randomBetween(
-        -maxTurn,
-        maxTurn
-      )
-
-    );
-
-
   targetYaw =
     normalizeAngle(
 
       currentYaw +
-      yawChange
+
+      degreesToRadians(
+
+        randomBetween(
+          -maxTurn,
+          maxTurn
+        )
+
+      )
 
     );
 
@@ -790,17 +1257,10 @@ function chooseHeadTarget(mySession) {
     degreesToRadians(
 
       randomBetween(
-        -25,
-        25
+        -22,
+        20
       )
 
-    );
-
-
-  const delay =
-    randomInt(
-      1200,
-      6000
     );
 
 
@@ -811,19 +1271,26 @@ function chooseHeadTarget(mySession) {
         mySession
       );
 
-    }, delay);
+    }, randomInt(
+      1800,
+      7000
+    ));
 
 }
 
 
 // ==================================================
-// SMOOTH HEAD LOOP
+// SMOOTH HEAD MOVEMENT
 // ==================================================
 
-function smoothHeadLoop(mySession) {
+function smoothHeadLoop(
+  mySession
+) {
 
   if (
-    !isSessionActive(mySession)
+    !isSessionActive(
+      mySession
+    )
   ) {
     return;
   }
@@ -846,7 +1313,7 @@ function smoothHeadLoop(mySession) {
   const smoothing =
     randomBetween(
       0.035,
-      0.075
+      0.065
     );
 
 
@@ -860,26 +1327,9 @@ function smoothHeadLoop(mySession) {
     smoothing;
 
 
-  const maxPitch =
-    Math.PI / 2;
-
-
-  currentPitch =
-    Math.max(
-
-      -maxPitch,
-
-      Math.min(
-        maxPitch,
-        currentPitch
-      )
-
-    );
-
-
   try {
 
-    const lookPromise =
+    const result =
       bot.look(
 
         currentYaw,
@@ -893,14 +1343,14 @@ function smoothHeadLoop(mySession) {
 
     if (
 
-      lookPromise &&
+      result &&
 
-      typeof lookPromise.catch ===
+      typeof result.catch ===
         'function'
 
     ) {
 
-      lookPromise.catch(
+      result.catch(
         () => {}
       );
 
@@ -927,7 +1377,9 @@ function smoothHeadLoop(mySession) {
 // SESSION CHECK
 // ==================================================
 
-function isSessionActive(mySession) {
+function isSessionActive(
+  mySession
+) {
 
   return (
 
@@ -943,10 +1395,36 @@ function isSessionActive(mySession) {
 
 
 // ==================================================
+// CONTROL HELPER
+// ==================================================
+
+function setControl(
+  control,
+  state
+) {
+
+  if (!bot) return;
+
+
+  try {
+
+    bot.setControlState(
+      control,
+      state
+    );
+
+  }
+
+  catch {}
+
+}
+
+
+// ==================================================
 // CLEANUP
 // ==================================================
 
-function stopLoops() {
+function stopMovementLoops() {
 
   clearTimeout(
     movementTimer
@@ -1008,10 +1486,63 @@ function stopLoops() {
 
 
 // ==================================================
+// WEIGHTED CHOICE
+// ==================================================
+
+function weightedChoice(
+  options
+) {
+
+  const total =
+    options.reduce(
+
+      (sum, option) =>
+        sum + option.weight,
+
+      0
+
+    );
+
+
+  let roll =
+    Math.random() *
+    total;
+
+
+  for (
+    const option of options
+  ) {
+
+    roll -=
+      option.weight;
+
+
+    if (
+      roll <= 0
+    ) {
+
+      return option;
+
+    }
+
+  }
+
+
+  return options[
+    options.length - 1
+  ];
+
+}
+
+
+// ==================================================
 // HELPERS
 // ==================================================
 
-function randomInt(min, max) {
+function randomInt(
+  min,
+  max
+) {
 
   return Math.floor(
 
@@ -1023,7 +1554,10 @@ function randomInt(min, max) {
 }
 
 
-function randomBetween(min, max) {
+function randomBetween(
+  min,
+  max
+) {
 
   return (
 
@@ -1036,7 +1570,9 @@ function randomBetween(min, max) {
 }
 
 
-function degreesToRadians(degrees) {
+function degreesToRadians(
+  degrees
+) {
 
   return (
 
@@ -1049,7 +1585,9 @@ function degreesToRadians(degrees) {
 }
 
 
-function normalizeAngle(angle) {
+function normalizeAngle(
+  angle
+) {
 
   while (
     angle > Math.PI
@@ -1072,6 +1610,105 @@ function normalizeAngle(angle) {
 
 
   return angle;
+
+}
+
+
+function readable(
+  value
+) {
+
+  if (
+    typeof value === 'string'
+  ) {
+
+    return value;
+
+  }
+
+
+  try {
+
+    return JSON.stringify(
+      value
+    );
+
+  }
+
+  catch {
+
+    return String(
+      value
+    );
+
+  }
+
+}
+
+
+function formatMilliseconds(
+  milliseconds
+) {
+
+  const seconds =
+    Math.floor(
+      milliseconds / 1000
+    );
+
+
+  const minutes =
+    Math.floor(
+      seconds / 60
+    );
+
+
+  const remainingSeconds =
+    seconds % 60;
+
+
+  const ms =
+    milliseconds % 1000;
+
+
+  return (
+    `${minutes}m ` +
+    `${remainingSeconds}.` +
+    `${String(ms).padStart(3, '0')}s`
+  );
+
+}
+
+
+function escapeHtml(
+  value
+) {
+
+  return String(value)
+
+    .replaceAll(
+      '&',
+      '&amp;'
+    )
+
+    .replaceAll(
+      '<',
+      '&lt;'
+    )
+
+    .replaceAll(
+      '>',
+      '&gt;'
+    )
+
+    .replaceAll(
+      '"',
+      '&quot;'
+    )
+
+    .replaceAll(
+      "'",
+      '&#039;'
+    );
 
 }
 
