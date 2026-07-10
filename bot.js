@@ -1,4 +1,3 @@
-
 const mineflayer = require('mineflayer');
 const express = require('express');
 const config = require('./config.json');
