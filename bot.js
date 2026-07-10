@@ -47,7 +47,7 @@ function humanBehaviorLoop() {
 
   // Reset all prior movement states before generating a new one
   bot.clearControlStates();
-  bot.setControlState('sneak', true); // Keep sneaking to muffle footstep checks
+  bot.setControlState('sneak', false); // Keep sneaking to muffle footstep checks
 
   if (choice < 0.25) {
     // Action A: Take a few steps forward
