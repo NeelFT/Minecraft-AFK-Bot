@@ -2,61 +2,50 @@ const mineflayer = require('mineflayer');
 const express = require('express');
 const config = require('./config.json');
 
-const app = express();
+
+// ======================================================
+// SETTINGS
+// ======================================================
+
 const WEB_PORT = process.env.PORT || 10000;
-const RECONNECT_DELAY = 15000;
+
+// This is only the delay AFTER a real disconnect.
+// It does not disconnect the bot.
+const RECONNECT_DELAY = 5000;
 
 
 // ======================================================
-// STATE
+// WEB SERVER
 // ======================================================
+
+const app = express();
 
 let bot = null;
 
-let status = 'Starting';
-let behavior = 'None';
+let botStatus = 'Starting';
+let currentBehavior = 'Waiting';
+
 let connectedSince = null;
 
 let lastError = 'None';
 let lastKick = 'None';
 let lastDisconnect = 'None';
 
-let generation = 0;
-let engineRunning = false;
-
-let movementTimer = null;
-let jumpTimer = null;
-let punchTimer = null;
-let headTargetTimer = null;
-let headLoopTimer = null;
-let reconnectTimer = null;
-
-let currentYaw = 0;
-let currentPitch = 0;
-
-let targetYaw = 0;
-let targetPitch = 0;
-
-let recentMovements = [];
-
 
 // ======================================================
-// WEB STATUS PAGE
+// STATUS PAGE
 // ======================================================
 
 app.get('/', (req, res) => {
 
   const uptime = connectedSince
-    ? formatTime(Date.now() - connectedSince)
+    ? formatDuration(Date.now() - connectedSince)
     : 'Not connected';
 
   res.status(200).send(`
 <!DOCTYPE html>
-
 <html>
-
 <head>
-
 <meta charset="UTF-8">
 
 <meta
@@ -64,7 +53,7 @@ app.get('/', (req, res) => {
   content="width=device-width, initial-scale=1.0"
 >
 
-<title>Nunya Status</title>
+<title>Nunya Bot Status</title>
 
 <style>
 
@@ -72,13 +61,13 @@ body {
   background: #111;
   color: #eee;
   font-family: Arial, sans-serif;
-  padding: 24px;
+  padding: 25px;
 }
 
 .card {
   max-width: 650px;
   margin: auto;
-  background: #1d1d1d;
+  background: #1e1e1e;
   padding: 25px;
   border-radius: 16px;
   line-height: 1.7;
@@ -91,6 +80,7 @@ h1 {
 .status {
   font-size: 23px;
   font-weight: bold;
+  margin-bottom: 20px;
 }
 
 .item {
@@ -99,7 +89,6 @@ h1 {
 }
 
 </style>
-
 </head>
 
 <body>
@@ -109,47 +98,47 @@ h1 {
 <h1>🤖 Nunya Bot Status</h1>
 
 <div class="status">
-Status: ${safe(status)}
+Status: ${escapeHtml(botStatus)}
 </div>
 
 <div class="item">
-🏃 Behavior: ${safe(behavior)}
+🏃 Current behavior:
+${escapeHtml(currentBehavior)}
 </div>
 
 <div class="item">
 🌍 Server:
-${safe(config.serverHost)}:${safe(config.serverPort)}
+${escapeHtml(config.serverHost)}:${escapeHtml(config.serverPort)}
 </div>
 
 <div class="item">
 👤 Username:
-${safe(config.botUsername)}
+${escapeHtml(config.botUsername)}
 </div>
 
 <div class="item">
-⏱ Uptime:
-${safe(uptime)}
+⏱ Connected uptime:
+${escapeHtml(uptime)}
 </div>
 
 <div class="item">
 ⚠️ Last error:
-${safe(lastError)}
+${escapeHtml(lastError)}
 </div>
 
 <div class="item">
 🚫 Last kick:
-${safe(lastKick)}
+${escapeHtml(lastKick)}
 </div>
 
 <div class="item">
 🔌 Last disconnect:
-${safe(lastDisconnect)}
+${escapeHtml(lastDisconnect)}
 </div>
 
 </div>
 
 </body>
-
 </html>
   `);
 });
@@ -161,17 +150,18 @@ app.get('/health', (req, res) => {
 
     web: 'online',
 
-    status,
+    minecraft: botStatus,
 
-    behavior,
+    behavior: currentBehavior,
 
     connected:
-      status === 'Spawned and active',
+      botStatus === 'Spawned and active',
 
-    uptime:
-      connectedSince
-        ? Date.now() - connectedSince
-        : null,
+    server:
+      `${config.serverHost}:${config.serverPort}`,
+
+    username:
+      config.botUsername,
 
     lastError,
 
@@ -198,38 +188,72 @@ app.listen(
 
 
 // ======================================================
-// CREATE BOT
+// ENGINE STATE
 // ======================================================
 
-function startBot() {
+let connectionGeneration = 0;
 
-  generation++;
+let reconnectTimer = null;
 
-  const myGeneration = generation;
+let movementTimer = null;
+let jumpTimer = null;
+let punchTimer = null;
+let headTargetTimer = null;
+let headLoopTimer = null;
 
-  status = 'Connecting';
-  behavior = 'Waiting for connection';
+let movementRunning = false;
+
+let currentYaw = 0;
+let currentPitch = 0;
+
+let targetYaw = 0;
+let targetPitch = 0;
+
+
+// Prevent recent movement repetition
+
+let recentMovementNames = [];
+
+
+// ======================================================
+// CONNECT BOT
+// ======================================================
+
+function initBot() {
+
+  connectionGeneration++;
+
+  const generation =
+    connectionGeneration;
+
+
+  botStatus = 'Connecting';
+
+  currentBehavior =
+    'Waiting for server connection';
+
 
   console.log('');
   console.log('====================================');
-  console.log('🤖 Starting bot');
+  console.log('🤖 Connecting Nunya...');
   console.log(
     `🌍 ${config.serverHost}:${config.serverPort}`
-  );
-  console.log(
-    `👤 ${config.botUsername}`
   );
   console.log('====================================');
 
 
-  // IMPORTANT:
-  // This is the connection structure that worked before.
+  /*
+    KEEP THIS CONNECTION BLOCK SIMPLE.
+
+    This is the setup that successfully spawned
+    in the earlier working version.
+  */
 
   bot = mineflayer.createBot({
 
     host: config.serverHost,
 
-    port: Number(config.serverPort),
+    port: config.serverPort,
 
     username: config.botUsername,
 
@@ -243,17 +267,24 @@ function startBot() {
 
 
   // ====================================================
-  // CONNECT
+  // TCP CONNECTION
   // ====================================================
 
   bot.on('connect', () => {
 
-    if (myGeneration !== generation) return;
+    if (
+      generation !== connectionGeneration
+    ) {
+      return;
+    }
 
-    status = 'TCP connected';
+
+    botStatus =
+      'TCP connected';
+
 
     console.log(
-      '🔌 TCP connected'
+      '🔌 TCP connection established'
     );
 
   });
@@ -265,13 +296,19 @@ function startBot() {
 
   bot.on('login', () => {
 
-    if (myGeneration !== generation) return;
+    if (
+      generation !== connectionGeneration
+    ) {
+      return;
+    }
 
-    status =
+
+    botStatus =
       'Logged in — waiting for spawn';
 
+
     console.log(
-      '📡 Login successful'
+      '📡 Minecraft login successful'
     );
 
   });
@@ -283,30 +320,43 @@ function startBot() {
 
   bot.on('spawn', () => {
 
-    if (myGeneration !== generation) return;
+    if (
+      generation !== connectionGeneration
+    ) {
+      return;
+    }
 
 
     console.log(
-      `✅ ${config.botUsername} spawned`
+      `✅ ${config.botUsername} spawned successfully`
     );
 
 
-    status =
+    botStatus =
       'Spawned and active';
 
-    behavior =
-      'Preparing movement';
+
+    currentBehavior =
+      'Starting movement engine';
+
 
     connectedSince =
       Date.now();
+
 
     lastError =
       'None';
 
 
-    // Kill any previous behavior timers first.
+    /*
+      Remove old movement timers before starting
+      the movement engine.
 
-    stopBehavior();
+      This prevents duplicate movement loops after
+      respawns.
+    */
+
+    stopMovement();
 
 
     try {
@@ -324,32 +374,40 @@ function startBot() {
     currentYaw =
       bot.entity.yaw;
 
+
     currentPitch =
       bot.entity.pitch;
 
+
     targetYaw =
       currentYaw;
+
 
     targetPitch =
       currentPitch;
 
 
+    /*
+      Very short delay after spawn.
+
+      The old versions waited 3 seconds.
+      This starts movement after 500 ms.
+    */
+
     setTimeout(() => {
 
       if (
-        myGeneration !== generation ||
-        !bot ||
-        !bot.entity
+        !isActive(generation)
       ) {
         return;
       }
 
 
-      startBehavior(
-        myGeneration
+      startMovementEngine(
+        generation
       );
 
-    }, 1500);
+    }, 500);
 
   });
 
@@ -360,18 +418,23 @@ function startBot() {
 
   bot.on('kicked', reason => {
 
-    if (myGeneration !== generation) return;
+    if (
+      generation !== connectionGeneration
+    ) {
+      return;
+    }
 
 
     lastKick =
       readable(reason);
 
-    status =
+
+    botStatus =
       'Kicked';
 
 
     console.log('');
-    console.log('🚫 KICKED:');
+    console.log('🚫 KICKED');
     console.log(lastKick);
 
   });
@@ -383,16 +446,20 @@ function startBot() {
 
   bot.on('error', error => {
 
-    if (myGeneration !== generation) return;
+    if (
+      generation !== connectionGeneration
+    ) {
+      return;
+    }
 
 
     lastError =
-      error?.message ||
+      error.message ||
       String(error);
 
 
     console.log('');
-    console.log(
+    console.error(
       `⚠️ ERROR: ${lastError}`
     );
 
@@ -400,12 +467,16 @@ function startBot() {
 
 
   // ====================================================
-  // CONNECTION END
+  // CONNECTION ENDED
   // ====================================================
 
   bot.on('end', reason => {
 
-    if (myGeneration !== generation) return;
+    if (
+      generation !== connectionGeneration
+    ) {
+      return;
+    }
 
 
     lastDisconnect =
@@ -414,14 +485,16 @@ function startBot() {
       );
 
 
-    connectedSince =
-      null;
-
-    status =
+    botStatus =
       'Disconnected — reconnect scheduled';
 
-    behavior =
-      'Disconnected';
+
+    currentBehavior =
+      'Connection lost';
+
+
+    connectedSince =
+      null;
 
 
     console.log('');
@@ -430,7 +503,22 @@ function startBot() {
     );
 
 
-    stopBehavior();
+    stopMovement();
+
+
+    /*
+      IMPORTANT:
+
+      There is NO intentional disconnect here.
+
+      No bot.quit()
+      No bot.end()
+      No process.exit()
+      No 20-minute timer
+
+      This reconnect code runs ONLY if the existing
+      Minecraft connection has already ended.
+    */
 
 
     clearTimeout(
@@ -441,7 +529,7 @@ function startBot() {
     reconnectTimer =
       setTimeout(() => {
 
-        startBot();
+        initBot();
 
       }, RECONNECT_DELAY);
 
@@ -451,185 +539,222 @@ function startBot() {
 
 
 // ======================================================
-// START BEHAVIOR ENGINE
+// START MOVEMENT ENGINE
 // ======================================================
 
-function startBehavior(myGeneration) {
+function startMovementEngine(generation) {
 
   if (
-    !isActive(myGeneration) ||
-    engineRunning
+    !isActive(generation)
   ) {
     return;
   }
 
 
-  engineRunning =
+  if (movementRunning) {
+    return;
+  }
+
+
+  movementRunning =
     true;
 
 
   console.log(
-    '🟢 Behavior engine started'
+    '🟢 Natural movement engine started'
   );
 
 
   chooseMovement(
-    myGeneration
+    generation
   );
+
 
   scheduleJump(
-    myGeneration
+    generation
   );
+
 
   schedulePunch(
-    myGeneration
+    generation
   );
+
 
   chooseHeadTarget(
-    myGeneration
+    generation
   );
 
-  smoothHeadLoop(
-    myGeneration
+
+  smoothHeadMovement(
+    generation
   );
 
 }
 
 
 // ======================================================
-// MOVEMENT OPTIONS
+// MOVEMENT PROFILES
 // ======================================================
 
-const movementOptions = [
+const movementProfiles = [
 
   {
-    id: 'forward',
     name: 'Walking forward',
     controls: ['forward'],
-    weight: 24
+    weight: 22
   },
 
   {
-    id: 'forwardLeft',
-    name: 'Walking diagonally left',
+    name: 'Moving forward-left',
     controls: ['forward', 'left'],
-    weight: 18
+    weight: 17
   },
 
   {
-    id: 'forwardRight',
-    name: 'Walking diagonally right',
+    name: 'Moving forward-right',
     controls: ['forward', 'right'],
-    weight: 18
+    weight: 17
   },
 
   {
-    id: 'left',
     name: 'Strafing left',
     controls: ['left'],
     weight: 8
   },
 
   {
-    id: 'right',
     name: 'Strafing right',
     controls: ['right'],
     weight: 8
   },
 
   {
-    id: 'backLeft',
-    name: 'Backing diagonally left',
+    name: 'Backing left',
     controls: ['back', 'left'],
     weight: 5
   },
 
   {
-    id: 'backRight',
-    name: 'Backing diagonally right',
+    name: 'Backing right',
     controls: ['back', 'right'],
     weight: 5
   },
 
   {
-    id: 'back',
     name: 'Walking backward',
     controls: ['back'],
     weight: 4
-  },
-
-  {
-    id: 'pause',
-    name: 'Brief pause',
-    controls: [],
-    weight: 1
   }
 
 ];
 
 
 // ======================================================
-// LONG CONTINUOUS MOVEMENT
+// CONTINUOUS LONG MOVEMENT
 // ======================================================
 
-function chooseMovement(myGeneration) {
+function chooseMovement(generation) {
 
-  if (!behaviorActive(myGeneration)) {
+  if (
+    !movementActive(generation)
+  ) {
     return;
   }
 
 
-  resetMovementControls();
+  /*
+    Reset only directional movement.
+
+    Jumping and punching are separate systems,
+    so they can overlap naturally.
+  */
+
+  setControl(
+    'forward',
+    false
+  );
+
+  setControl(
+    'back',
+    false
+  );
+
+  setControl(
+    'left',
+    false
+  );
+
+  setControl(
+    'right',
+    false
+  );
+
+  setControl(
+    'sprint',
+    false
+  );
+
+  setControl(
+    'sneak',
+    false
+  );
 
 
-  let choice = null;
+  let selected;
 
   let attempts = 0;
 
 
-  // Avoid recent repetition.
+  /*
+    Avoid any of the previous 3 movements.
+
+    This dramatically reduces obvious repetition.
+  */
 
   do {
 
-    choice =
+    selected =
       weightedChoice(
-        movementOptions
+        movementProfiles
       );
+
 
     attempts++;
 
   } while (
 
-    recentMovements.includes(
-      choice.id
+    recentMovementNames.includes(
+      selected.name
     ) &&
 
-    attempts < 20
+    attempts < 30
 
   );
 
 
-  recentMovements.push(
-    choice.id
+  recentMovementNames.push(
+    selected.name
   );
 
-
-  // Remember previous 3 movements.
 
   if (
-    recentMovements.length > 3
+    recentMovementNames.length > 3
   ) {
 
-    recentMovements.shift();
+    recentMovementNames.shift();
 
   }
 
 
+  /*
+    Apply the movement controls.
+  */
+
   for (
-    const control of choice.controls
+    const control of selected.controls
   ) {
 
-    bot.setControlState(
+    setControl(
       control,
       true
     );
@@ -637,73 +762,62 @@ function chooseMovement(myGeneration) {
   }
 
 
-  // Occasional sprint while moving forward.
+  /*
+    Occasional sprint.
 
-  const canSprint =
-    choice.controls.includes(
+    Only possible when moving forward.
+  */
+
+  const movingForward =
+    selected.controls.includes(
       'forward'
     );
 
 
   if (
-    canSprint &&
-    Math.random() < 0.16
+    movingForward &&
+    Math.random() < 0.20
   ) {
 
-    bot.setControlState(
+    setControl(
       'sprint',
       true
     );
 
 
-    behavior =
-      `${choice.name} + sprinting`;
+    currentBehavior =
+      `${selected.name} + sprint`;
 
   }
 
   else {
 
-    behavior =
-      choice.name;
+    currentBehavior =
+      selected.name;
 
   }
 
 
-  let duration;
+  /*
+    Long movement phases.
 
+    7–18 seconds.
 
-  if (
-    choice.id === 'pause'
-  ) {
+    There is NO automatic standing-still phase.
+  */
 
-    // Very short, rare pause.
-
-    duration =
-      randomInt(
-        700,
-        1800
-      );
-
-  }
-
-  else {
-
-    // Long movement periods.
-
-    duration =
-      randomInt(
-        6000,
-        16000
-      );
-
-  }
+  const duration =
+    randomInt(
+      7000,
+      18000
+    );
 
 
   movementTimer =
     setTimeout(() => {
 
       chooseMovement(
-        myGeneration
+        generation
       );
 
     }, duration);
@@ -712,63 +826,68 @@ function chooseMovement(myGeneration) {
 
 
 // ======================================================
-// JUMP SYSTEM
+// INDEPENDENT JUMPING
 // ======================================================
 
-function scheduleJump(myGeneration) {
+function scheduleJump(generation) {
 
-  if (!behaviorActive(myGeneration)) {
+  if (
+    !movementActive(generation)
+  ) {
     return;
   }
 
 
+  /*
+    Uneven jump timing.
+
+    Because this is independent from walking,
+    she can jump while moving diagonally,
+    sprinting, turning her head, etc.
+  */
+
   const delay =
     randomInt(
-      4000,
-      15000
+      3500,
+      14000
     );
 
 
   jumpTimer =
     setTimeout(() => {
 
-      if (!behaviorActive(myGeneration)) {
+      if (
+        !movementActive(generation)
+      ) {
         return;
       }
 
 
-      try {
+      setControl(
+        'jump',
+        true
+      );
 
-        bot.setControlState(
+
+      setTimeout(() => {
+
+        if (
+          !isActive(generation)
+        ) {
+          return;
+        }
+
+
+        setControl(
           'jump',
-          true
+          false
         );
 
-
-        setTimeout(() => {
-
-          if (!isActive(myGeneration)) {
-            return;
-          }
-
-
-          try {
-
-            bot.setControlState(
-              'jump',
-              false
-            );
-
-          } catch {}
-
-        }, randomInt(250, 500));
-
-
-      } catch {}
+      }, randomInt(250, 500));
 
 
       scheduleJump(
-        myGeneration
+        generation
       );
 
     }, delay);
@@ -777,27 +896,31 @@ function scheduleJump(myGeneration) {
 
 
 // ======================================================
-// PUNCH SYSTEM
+// RANDOM ARM SWINGS
 // ======================================================
 
-function schedulePunch(myGeneration) {
+function schedulePunch(generation) {
 
-  if (!behaviorActive(myGeneration)) {
+  if (
+    !movementActive(generation)
+  ) {
     return;
   }
 
 
   const delay =
     randomInt(
-      3500,
-      16000
+      3000,
+      15000
     );
 
 
   punchTimer =
     setTimeout(() => {
 
-      if (!behaviorActive(myGeneration)) {
+      if (
+        !movementActive(generation)
+      ) {
         return;
       }
 
@@ -805,7 +928,7 @@ function schedulePunch(myGeneration) {
       try {
 
         bot.swingArm(
-          Math.random() < 0.92
+          Math.random() < 0.9
             ? 'right'
             : 'left'
         );
@@ -813,15 +936,21 @@ function schedulePunch(myGeneration) {
       } catch {}
 
 
-      // Occasional second swing.
+      /*
+        Sometimes do another swing shortly afterward.
+
+        Not every time.
+      */
 
       if (
-        Math.random() < 0.13
+        Math.random() < 0.15
       ) {
 
         setTimeout(() => {
 
-          if (!isActive(myGeneration)) {
+          if (
+            !isActive(generation)
+          ) {
             return;
           }
 
@@ -840,7 +969,7 @@ function schedulePunch(myGeneration) {
 
 
       schedulePunch(
-        myGeneration
+        generation
       );
 
     }, delay);
@@ -852,9 +981,11 @@ function schedulePunch(myGeneration) {
 // HEAD TARGET SELECTION
 // ======================================================
 
-function chooseHeadTarget(myGeneration) {
+function chooseHeadTarget(generation) {
 
-  if (!behaviorActive(myGeneration)) {
+  if (
+    !movementActive(generation)
+  ) {
     return;
   }
 
@@ -863,12 +994,18 @@ function chooseHeadTarget(myGeneration) {
     Math.random();
 
 
-  let turnSize;
+  let turnAmount;
 
 
-  if (roll < 0.72) {
+  /*
+    68% small turns
+    26% medium turns
+    6% large turns
+  */
 
-    turnSize =
+  if (roll < 0.68) {
+
+    turnAmount =
       randomBetween(
         8,
         35
@@ -876,9 +1013,9 @@ function chooseHeadTarget(myGeneration) {
 
   }
 
-  else if (roll < 0.95) {
+  else if (roll < 0.94) {
 
-    turnSize =
+    turnAmount =
       randomBetween(
         35,
         85
@@ -888,20 +1025,24 @@ function chooseHeadTarget(myGeneration) {
 
   else {
 
-    turnSize =
+    turnAmount =
       randomBetween(
         85,
-        145
+        150
       );
 
   }
 
 
+  /*
+    Random left/right direction.
+  */
+
   if (
     Math.random() < 0.5
   ) {
 
-    turnSize *= -1;
+    turnAmount *= -1;
 
   }
 
@@ -912,7 +1053,7 @@ function chooseHeadTarget(myGeneration) {
       currentYaw +
 
       degreesToRadians(
-        turnSize
+        turnAmount
       )
 
     );
@@ -922,21 +1063,25 @@ function chooseHeadTarget(myGeneration) {
     degreesToRadians(
 
       randomBetween(
-        -18,
-        16
+        -20,
+        18
       )
 
     );
 
 
+  /*
+    Uneven timing between gaze targets.
+  */
+
   headTargetTimer =
     setTimeout(() => {
 
       chooseHeadTarget(
-        myGeneration
+        generation
       );
 
-    }, randomInt(2500, 9000));
+    }, randomInt(1800, 7500));
 
 }
 
@@ -945,9 +1090,11 @@ function chooseHeadTarget(myGeneration) {
 // SMOOTH HEAD MOVEMENT
 // ======================================================
 
-function smoothHeadLoop(myGeneration) {
+function smoothHeadMovement(generation) {
 
-  if (!behaviorActive(myGeneration)) {
+  if (
+    !movementActive(generation)
+  ) {
     return;
   }
 
@@ -966,19 +1113,24 @@ function smoothHeadLoop(myGeneration) {
     currentPitch;
 
 
-  // Constant smoothing gives genuinely smooth movement.
+  /*
+    Smooth interpolation.
+
+    This updates every 50 ms instead of instantly
+    snapping the head.
+  */
 
   currentYaw +=
-    yawDifference * 0.04;
+    yawDifference * 0.045;
 
 
   currentPitch +=
-    pitchDifference * 0.04;
+    pitchDifference * 0.045;
 
 
   try {
 
-    const lookResult =
+    const result =
       bot.look(
 
         currentYaw,
@@ -991,11 +1143,11 @@ function smoothHeadLoop(myGeneration) {
 
 
     if (
-      lookResult &&
-      typeof lookResult.catch === 'function'
+      result &&
+      typeof result.catch === 'function'
     ) {
 
-      lookResult.catch(
+      result.catch(
         () => {}
       );
 
@@ -1007,8 +1159,8 @@ function smoothHeadLoop(myGeneration) {
   headLoopTimer =
     setTimeout(() => {
 
-      smoothHeadLoop(
-        myGeneration
+      smoothHeadMovement(
+        generation
       );
 
     }, 50);
@@ -1017,54 +1169,12 @@ function smoothHeadLoop(myGeneration) {
 
 
 // ======================================================
-// RESET DIRECTIONAL CONTROLS
+// STOP MOVEMENT
 // ======================================================
 
-function resetMovementControls() {
+function stopMovement() {
 
-  if (!bot) return;
-
-
-  bot.setControlState(
-    'forward',
-    false
-  );
-
-  bot.setControlState(
-    'back',
-    false
-  );
-
-  bot.setControlState(
-    'left',
-    false
-  );
-
-  bot.setControlState(
-    'right',
-    false
-  );
-
-  bot.setControlState(
-    'sprint',
-    false
-  );
-
-  bot.setControlState(
-    'sneak',
-    false
-  );
-
-}
-
-
-// ======================================================
-// STOP BEHAVIOR
-// ======================================================
-
-function stopBehavior() {
-
-  engineRunning =
+  movementRunning =
     false;
 
 
@@ -1072,17 +1182,21 @@ function stopBehavior() {
     movementTimer
   );
 
+
   clearTimeout(
     jumpTimer
   );
+
 
   clearTimeout(
     punchTimer
   );
 
+
   clearTimeout(
     headTargetTimer
   );
+
 
   clearTimeout(
     headLoopTimer
@@ -1110,33 +1224,52 @@ function stopBehavior() {
 
 
 // ======================================================
-// CHECKS
+// CONTROL HELPER
 // ======================================================
 
-function isActive(myGeneration) {
+function setControl(control, state) {
+
+  if (!bot) return;
+
+
+  try {
+
+    bot.setControlState(
+      control,
+      state
+    );
+
+  } catch {}
+
+}
+
+
+// ======================================================
+// CONNECTION CHECKS
+// ======================================================
+
+function isActive(generation) {
 
   return (
 
-    myGeneration === generation &&
+    generation === connectionGeneration &&
 
-    bot !== null &&
+    bot &&
 
-    bot.entity !== null &&
-
-    bot.entity !== undefined
+    bot.entity
 
   );
 
 }
 
 
-function behaviorActive(myGeneration) {
+function movementActive(generation) {
 
   return (
 
-    isActive(myGeneration) &&
+    isActive(generation) &&
 
-    engineRunning
+    movementRunning
 
   );
 
@@ -1144,16 +1277,16 @@ function behaviorActive(myGeneration) {
 
 
 // ======================================================
-// WEIGHTED RANDOM CHOICE
+// WEIGHTED RANDOM SELECTION
 // ======================================================
 
 function weightedChoice(options) {
 
-  const total =
+  const totalWeight =
     options.reduce(
 
-      (sum, option) =>
-        sum + option.weight,
+      (total, option) =>
+        total + option.weight,
 
       0
 
@@ -1162,7 +1295,7 @@ function weightedChoice(options) {
 
   let roll =
     Math.random() *
-    total;
+    totalWeight;
 
 
   for (
@@ -1290,7 +1423,7 @@ function readable(value) {
 }
 
 
-function formatTime(milliseconds) {
+function formatDuration(milliseconds) {
 
   const seconds =
     Math.floor(
@@ -1323,7 +1456,7 @@ function formatTime(milliseconds) {
 }
 
 
-function safe(value) {
+function escapeHtml(value) {
 
   return String(value)
 
@@ -1359,4 +1492,4 @@ function safe(value) {
 // START
 // ======================================================
 
-startBot();
+initBot();
