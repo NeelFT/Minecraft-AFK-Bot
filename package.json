@@ -9,7 +9,7 @@
   "author": "nuekkis",
   "license": "MIT",
   "dependencies": {
-  "mineflayer": "latest",
+  "mineflayer": "^4.22.0",
   "minecraft-data": "latest",
   "express": "^4.19.0"
   }
