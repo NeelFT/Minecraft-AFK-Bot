@@ -1,97 +1,57 @@
 const mineflayer = require('mineflayer');
+const express = require('express');
 const config = require('./config.json');
 
-let bot = null;
+// Render HTTP port
+const app = express();
+const webPort = process.env.PORT || 10000;
+
+app.get('/', (req, res) => {
+  res.send('Minecraft bot is running');
+});
+
+app.listen(webPort, '0.0.0.0', () => {
+  console.log(`🌐 Web server listening on port ${webPort}`);
+});
+
+// Minecraft bot
+const bot = mineflayer.createBot({
+  host: 'Ox.aternos.host',
+  port: 11625,
+  username: config.botUsername,
+  auth: 'offline',
+  version: false,
+  viewDistance: config.botChunk
+});
+
 let movementPhase = 0;
-let movementTimer = null;
-let reconnectTimer = null;
 
 const STEP_INTERVAL = 1500;
 const JUMP_DURATION = 500;
 
-function createBot() {
-  console.log('=================================');
-  console.log('🤖 Starting bot...');
-  console.log(`Host: ${config.serverHost}`);
-  console.log(`Port: ${config.serverPort}`);
-  console.log(`Username: ${config.botUsername}`);
-  console.log('=================================');
+bot.on('connect', () => {
+  console.log('🔌 Connected to Minecraft server socket');
+});
 
-  bot = mineflayer.createBot({
-    host: config.serverHost,
-    port: Number(config.serverPort),
-    username: config.botUsername,
-    auth: 'offline',
-    viewDistance: config.botChunk
-  });
+bot.on('login', () => {
+  console.log('📡 Minecraft login successful');
+});
 
-  bot.on('connect', () => {
-    console.log('🔌 TCP connection established.');
-  });
+bot.on('spawn', () => {
+  console.log(`✅ ${config.botUsername} spawned!`);
 
-  bot.on('login', () => {
-    console.log('📡 Login packet accepted.');
-  });
+  setTimeout(() => {
+    bot.setControlState('sneak', true);
+    console.log(`✅ ${config.botUsername} is Ready!`);
+  }, 3000);
 
-  bot.on('spawn', () => {
-    console.log(`✅ ${config.botUsername} spawned successfully!`);
-
-    movementPhase = 0;
-
-    setTimeout(() => {
-      if (!bot || !bot.entity) return;
-
-      bot.setControlState('sneak', true);
-
-      console.log(`🟢 ${config.botUsername} is ready!`);
-
-      clearTimeout(movementTimer);
-      movementTimer = setTimeout(
-        movementCycle,
-        STEP_INTERVAL
-      );
-
-    }, 3000);
-  });
-
-  bot.on('kicked', (reason) => {
-    console.log('🚫 BOT KICKED:');
-
-    try {
-      console.log(JSON.stringify(reason, null, 2));
-    } catch {
-      console.log(reason);
-    }
-  });
-
-  bot.on('error', (err) => {
-    console.error('⚠️ ERROR:');
-    console.error(err);
-  });
-
-  bot.on('end', (reason) => {
-    console.log(`⛔ Bot disconnected: ${reason || 'Unknown reason'}`);
-
-    clearTimeout(movementTimer);
-    clearTimeout(reconnectTimer);
-
-    movementTimer = null;
-
-    reconnectTimer = setTimeout(() => {
-      console.log('🔄 Attempting reconnection...');
-      createBot();
-    }, 30000);
-  });
-}
+  setTimeout(movementCycle, STEP_INTERVAL);
+});
 
 function movementCycle() {
-  if (!bot || !bot.entity) {
-    console.log('⚠️ Movement skipped: bot not spawned.');
-    return;
-  }
+  if (!bot.entity) return;
 
   switch (movementPhase) {
-
     case 0:
       bot.setControlState('forward', true);
       bot.setControlState('back', false);
@@ -110,9 +70,7 @@ function movementCycle() {
       bot.setControlState('jump', true);
 
       setTimeout(() => {
-        if (bot && bot.entity) {
-          bot.setControlState('jump', false);
-        }
+        bot.setControlState('jump', false);
       }, JUMP_DURATION);
 
       break;
@@ -125,11 +83,17 @@ function movementCycle() {
   }
 
   movementPhase = (movementPhase + 1) % 4;
-
-  movementTimer = setTimeout(
-    movementCycle,
-    STEP_INTERVAL
-  );
+  setTimeout(movementCycle, STEP_INTERVAL);
 }
 
-createBot();
+bot.on('kicked', reason => {
+  console.log('🚫 Kicked:', reason);
+});
+
+bot.on('error', err => {
+  console.error('⚠️ Minecraft error:', err);
+});
+
+bot.on('end', reason => {
+  console.log('⛔ Minecraft bot disconnected:', reason);
+});
